@@ -1,5 +1,16 @@
 # Two-Node Toolbox Release Notes
 
+## Version 0.5.6 - Etcd Cluster Recovery
+*Release Date: October 2025*
+
+### New Features
+
+#### Force New Cluster Playbook
+- Added `force-new-cluster.yml` for automated etcd cluster recovery via CIB attributes
+- Ansible conversion of Carlo Lobrano's shell script using `cluster_vms` inventory group
+
+---
+
 ## Version 0.5.5 - Cluster VM Inventory and Playbook Standardization
 *Release Date: October 2025*
 

@@ -26,6 +26,43 @@ This directory contains multiple helper tools for various OpenShift cluster oper
 
 ## Available Tools
 
+### Force New Cluster
+
+Automates etcd cluster recovery by configuring CIB (Cluster Information Base) attributes to force a new etcd cluster formation. This is useful when etcd quorum is lost and manual intervention is required to restore cluster functionality.
+
+**Features:**
+- Automated etcd snapshot creation before recovery operations
+- CIB attribute management for force-new-cluster operations
+- Leader/follower node detection and verification
+- Etcd member list management
+- Automatic cleanup and resource recovery
+- STONITH management during operations
+
+**Usage:**
+
+```bash
+# From helpers/ directory
+ansible-playbook -i ../deploy/openshift-clusters/inventory.ini force-new-cluster.yml
+```
+
+**Prerequisites:**
+- Inventory file with exactly 2 nodes in `cluster_vms` group
+- SSH access to cluster VMs with sudo privileges
+- Running Pacemaker cluster with etcd resources
+
+**What it does:**
+1. Validates cluster has exactly 2 nodes
+2. Disables STONITH temporarily for safety
+3. Takes etcd snapshots on both nodes (if etcd is not running)
+4. Clears existing CIB attributes (learner_node, standalone_node, force_new_cluster)
+5. Sets force_new_cluster attribute on the leader node (first node in cluster_vms)
+6. Verifies CIB attributes on both nodes
+7. Removes follower from etcd member list
+8. Performs pcs resource cleanup on both nodes
+9. Re-enables STONITH after completion
+
+**Attribution:** Original shell script by Carlo Lobrano
+
 ### Log Collection
 
 Collects etcd related logs from cluster VMs
