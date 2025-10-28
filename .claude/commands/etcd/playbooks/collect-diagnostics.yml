@@ -1,0 +1,311 @@
+---
+# Comprehensive diagnostic data collection for etcd troubleshooting
+# Collects Pacemaker status, etcd health, container status, and system logs
+
+- name: Collect Etcd and Pacemaker Diagnostics
+  hosts: cluster_vms
+  gather_facts: yes
+  become: yes
+
+  vars:
+    log_timeframe: "1 hour ago"
+    log_lines_pacemaker: 200
+    log_lines_corosync: 100
+    log_lines_etcd: 200
+    output_dir: "/tmp/etcd-diagnostics-{{ ansible_date_time.iso8601_basic_short }}"
+
+  tasks:
+    - name: Create local output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}/{{ inventory_hostname }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      become: no
+
+    # ============================================================
+    # Pacemaker Status Collection
+    # ============================================================
+
+    - name: Get pcs status
+      ansible.builtin.command: pcs status
+      register: pcs_status
+      changed_when: false
+      failed_when: false
+
+    - name: Save pcs status
+      ansible.builtin.copy:
+        content: "{{ pcs_status.stdout }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}/pcs_status.txt"
+      delegate_to: localhost
+      become: no
+
+    - name: Get pcs resource status
+      ansible.builtin.command: pcs resource status
+      register: pcs_resource_status
+      changed_when: false
+      failed_when: false
+
+    - name: Save pcs resource status
+      ansible.builtin.copy:
+        content: "{{ pcs_resource_status.stdout }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}/pcs_resource_status.txt"
+      delegate_to: localhost
+      become: no
+
+    - name: Get pcs constraint list
+      ansible.builtin.command: pcs constraint list
+      register: pcs_constraints
+      changed_when: false
+      failed_when: false
+
+    - name: Save pcs constraints
+      ansible.builtin.copy:
+        content: "{{ pcs_constraints.stdout }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}/pcs_constraints.txt"
+      delegate_to: localhost
+      become: no
+
+    - name: Get crm_mon output
+      ansible.builtin.command: crm_mon -1
+      register: crm_mon
+      changed_when: false
+      failed_when: false
+
+    - name: Save crm_mon output
+      ansible.builtin.copy:
+        content: "{{ crm_mon.stdout }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}/crm_mon.txt"
+      delegate_to: localhost
+      become: no
+
+    # ============================================================
+    # CIB Attributes Collection
+    # ============================================================
+
+    - name: Query standalone_node attribute
+      ansible.builtin.command: crm_attribute --query --name standalone_node
+      register: attr_standalone
+      changed_when: false
+      failed_when: false
+
+    - name: Query learner_node attribute
+      ansible.builtin.command: crm_attribute --query --name learner_node
+      register: attr_learner
+      changed_when: false
+      failed_when: false
+
+    - name: Query force_new_cluster attribute
+      ansible.builtin.command: crm_attribute --query --name force_new_cluster --lifetime reboot
+      register: attr_force_new
+      changed_when: false
+      failed_when: false
+
+    - name: Query node_ip attribute
+      ansible.builtin.command: crm_attribute --query --name node_ip
+      register: attr_node_ip
+      changed_when: false
+      failed_when: false
+
+    - name: Query member_id attribute
+      ansible.builtin.command: crm_attribute --query --name member_id
+      register: attr_member_id
+      changed_when: false
+      failed_when: false
+
+    - name: Query cluster_id attribute
+      ansible.builtin.command: crm_attribute --query --name cluster_id
+      register: attr_cluster_id
+      changed_when: false
+      failed_when: false
+
+    - name: Query revision attribute
+      ansible.builtin.command: crm_attribute --query --name revision
+      register: attr_revision
+      changed_when: false
+      failed_when: false
+
+    - name: Save CIB attributes
+      ansible.builtin.copy:
+        content: |
+          standalone_node: {{ attr_standalone.stdout | default('N/A') }}
+          learner_node: {{ attr_learner.stdout | default('N/A') }}
+          force_new_cluster: {{ attr_force_new.stdout | default('N/A') }}
+          node_ip: {{ attr_node_ip.stdout | default('N/A') }}
+          member_id: {{ attr_member_id.stdout | default('N/A') }}
+          cluster_id: {{ attr_cluster_id.stdout | default('N/A') }}
+          revision: {{ attr_revision.stdout | default('N/A') }}
+        dest: "{{ output_dir }}/{{ inventory_hostname }}/cib_attributes.txt"
+      delegate_to: localhost
+      become: no
+
+    # ============================================================
+    # Etcd Container Status Collection
+    # ============================================================
+
+    - name: Get podman ps for etcd
+      ansible.builtin.command: podman ps -a --filter name=etcd
+      register: podman_ps
+      changed_when: false
+      failed_when: false
+
+    - name: Save podman ps output
+      ansible.builtin.copy:
+        content: "{{ podman_ps.stdout }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}/podman_ps.txt"
+      delegate_to: localhost
+      become: no
+
+    - name: Get podman inspect for etcd
+      ansible.builtin.command: podman inspect etcd
+      register: podman_inspect
+      changed_when: false
+      failed_when: false
+
+    - name: Save podman inspect output
+      ansible.builtin.copy:
+        content: "{{ podman_inspect.stdout }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}/podman_inspect.json"
+      delegate_to: localhost
+      become: no
+      when: podman_inspect.rc == 0
+
+    - name: Get podman logs for etcd
+      ansible.builtin.command: podman logs --tail 100 etcd
+      register: podman_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Save podman logs
+      ansible.builtin.copy:
+        content: "{{ podman_logs.stdout }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}/podman_logs.txt"
+      delegate_to: localhost
+      become: no
+      when: podman_logs.rc == 0
+
+    # ============================================================
+    # Etcd Cluster Health Collection
+    # ============================================================
+
+    - name: Get etcd member list
+      ansible.builtin.command: podman exec etcd etcdctl member list -w table
+      register: etcd_member_list
+      changed_when: false
+      failed_when: false
+
+    - name: Save etcd member list
+      ansible.builtin.copy:
+        content: "{{ etcd_member_list.stdout }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}/etcd_member_list.txt"
+      delegate_to: localhost
+      become: no
+      when: etcd_member_list.rc == 0
+
+    - name: Get etcd endpoint health
+      ansible.builtin.command: podman exec etcd etcdctl endpoint health -w table
+      register: etcd_health
+      changed_when: false
+      failed_when: false
+
+    - name: Save etcd endpoint health
+      ansible.builtin.copy:
+        content: "{{ etcd_health.stdout }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}/etcd_endpoint_health.txt"
+      delegate_to: localhost
+      become: no
+      when: etcd_health.rc == 0
+
+    - name: Get etcd endpoint status
+      ansible.builtin.command: podman exec etcd etcdctl endpoint status -w table
+      register: etcd_status
+      changed_when: false
+      failed_when: false
+
+    - name: Save etcd endpoint status
+      ansible.builtin.copy:
+        content: "{{ etcd_status.stdout }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}/etcd_endpoint_status.txt"
+      delegate_to: localhost
+      become: no
+      when: etcd_status.rc == 0
+
+    # ============================================================
+    # System Logs Collection
+    # ============================================================
+
+    - name: Get Pacemaker logs
+      ansible.builtin.command: journalctl -u pacemaker --since "{{ log_timeframe }}" -n {{ log_lines_pacemaker }}
+      register: journal_pacemaker
+      changed_when: false
+      failed_when: false
+
+    - name: Save Pacemaker logs
+      ansible.builtin.copy:
+        content: "{{ journal_pacemaker.stdout }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}/journal_pacemaker.log"
+      delegate_to: localhost
+      become: no
+
+    - name: Get Corosync logs
+      ansible.builtin.command: journalctl -u corosync --since "{{ log_timeframe }}" -n {{ log_lines_corosync }}
+      register: journal_corosync
+      changed_when: false
+      failed_when: false
+
+    - name: Save Corosync logs
+      ansible.builtin.copy:
+        content: "{{ journal_corosync.stdout }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}/journal_corosync.log"
+      delegate_to: localhost
+      become: no
+
+    - name: Get etcd-related logs
+      ansible.builtin.command: journalctl --grep etcd --since "{{ log_timeframe }}" -n {{ log_lines_etcd }}
+      register: journal_etcd
+      changed_when: false
+      failed_when: false
+
+    - name: Save etcd logs
+      ansible.builtin.copy:
+        content: "{{ journal_etcd.stdout }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}/journal_etcd.log"
+      delegate_to: localhost
+      become: no
+
+    # ============================================================
+    # Summary
+    # ============================================================
+
+    - name: Display collection summary
+      ansible.builtin.debug:
+        msg:
+          - "Diagnostics collected for {{ inventory_hostname }}"
+          - "Output directory: {{ output_dir }}/{{ inventory_hostname }}"
+          - "Etcd running: {{ 'Yes' if podman_ps.stdout is search('etcd') else 'No' }}"
+          - "Cluster ID: {{ attr_cluster_id.stdout | default('N/A') }}"
+
+  post_tasks:
+    - name: Create diagnostics summary
+      ansible.builtin.copy:
+        content: |
+          Etcd Diagnostics Collection Summary
+          ====================================
+          Collection Time: {{ ansible_date_time.iso8601 }}
+          Output Directory: {{ output_dir }}
+
+          Nodes Analyzed:
+          {% for host in groups['cluster_vms'] %}
+          - {{ host }}: {{ hostvars[host]['ansible_host'] }}
+          {% endfor %}
+
+          Next Steps:
+          1. Review the collected data in {{ output_dir }}
+          2. Analyze Pacemaker status for resource failures
+          3. Check etcd cluster health and member status
+          4. Examine logs for error patterns
+          5. Compare cluster_id values between nodes
+        dest: "{{ output_dir }}/README.txt"
+      delegate_to: localhost
+      become: no
+      run_once: yes
