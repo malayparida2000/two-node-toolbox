@@ -1,0 +1,63 @@
+---
+# Ansible playbook to validate access to cluster VMs and basic connectivity
+# This is the first step in the etcd troubleshooting workflow
+
+- name: Validate Ansible Access to Cluster VMs
+  hosts: cluster_vms
+  gather_facts: yes
+  become: no
+
+  tasks:
+    - name: Test basic connectivity
+      ansible.builtin.ping:
+      register: ping_result
+
+    - name: Display connectivity result
+      ansible.builtin.debug:
+        msg: "Successfully connected to {{ inventory_hostname }} ({{ ansible_host }})"
+      when: ping_result is succeeded
+
+    - name: Check if required tools are available
+      ansible.builtin.command: which {{ item }}
+      loop:
+        - pcs
+        - podman
+        - journalctl
+        - crm_attribute
+        - etcdctl
+      register: tool_check
+      failed_when: false
+      changed_when: false
+
+    - name: Report available tools
+      ansible.builtin.debug:
+        msg: "{{ item.item }}: {{ 'Available' if item.rc == 0 else 'NOT FOUND' }}"
+      loop: "{{ tool_check.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Check sudo access
+      ansible.builtin.command: sudo -n true
+      register: sudo_check
+      failed_when: false
+      changed_when: false
+
+    - name: Report sudo access
+      ansible.builtin.debug:
+        msg: "Sudo access: {{ 'Available (passwordless)' if sudo_check.rc == 0 else 'Requires password or not available' }}"
+
+    - name: Gather system information
+      ansible.builtin.setup:
+        gather_subset:
+          - network
+          - hardware
+      register: facts
+
+    - name: Display node information
+      ansible.builtin.debug:
+        msg:
+          - "Hostname: {{ ansible_hostname }}"
+          - "IP Address: {{ ansible_default_ipv4.address | default('N/A') }}"
+          - "Distribution: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Kernel: {{ ansible_kernel }}"
+          - "Memory: {{ (ansible_memtotal_mb / 1024) | round(1) }} GB"
