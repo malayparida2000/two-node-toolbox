@@ -12,3 +12,4 @@ kcli
 kcli/*
 deploy/openshift-clusters/inventory.ini.*
 logs/*
+helpers/*.rpm
