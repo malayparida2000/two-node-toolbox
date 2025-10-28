@@ -126,6 +126,273 @@ Based on your analysis, provide:
 4. **Verification Steps**: How to confirm the issue is resolved
 5. **Prevention Recommendations**: How to avoid recurrence
 
+## Analysis Guidelines
+
+### Component-Specific Analysis Functions
+
+#### Pacemaker Cluster Analysis
+
+**Key Indicators:**
+- Quorum status: `pcs status` shows "quorum" or "no quorum"
+- Node status: online, standby, offline, UNCLEAN
+- Resource status: Started, Stopped, Failed, Master/Slave
+- Failed actions count and descriptions
+
+**Analysis Questions:**
+1. Do both nodes show as online in the cluster?
+2. Is quorum achieved? (Should show quorum with 2 nodes)
+3. Are there any failed actions for the etcd resource?
+4. Is stonith enabled and configured correctly?
+5. Are there any location/order/colocation constraints preventing etcd from starting?
+
+**Common Issues:**
+- **No quorum**: One node is offline or network partition - check corosync logs
+- **Failed actions**: Resource failed to start - examine failure reason and run `pcs resource cleanup`
+- **UNCLEAN node**: Fencing failed - check fence agent configuration and BMC access
+
+#### Etcd Container Analysis
+
+**Key Indicators:**
+- Container state: running, stopped, exited
+- Exit code if stopped (0 = clean, non-zero = error)
+- Container restart count
+- Last log messages from container
+
+**Analysis Questions:**
+1. Is the etcd container running on both nodes?
+2. If stopped, what was the exit code?
+3. What do the last 20 lines of container logs show?
+4. Are there certificate errors in the logs?
+5. Are there network connectivity errors?
+
+**Common Issues:**
+- **Container not found**: Pacemaker hasn't created it yet or resource is stopped
+- **Exit code 1**: Check logs for specific error (certs, permissions, corruption)
+- **Repeated restarts**: Likely configuration or persistent error - check logs
+
+#### Etcd Cluster Health Analysis
+
+**Key Indicators:**
+- Member list: number of members, their status (started/unstarted)
+- Endpoint health: healthy/unhealthy, latency
+- Endpoint status: leader election, raft index, DB size
+- Cluster ID consistency across nodes
+
+**Analysis Questions:**
+1. How many members are in the member list?
+2. Are all members started?
+3. Is there a leader elected?
+4. Do both nodes show the same cluster ID in CIB attributes?
+5. Are raft indices progressing or stuck?
+
+**Common Issues:**
+- **Different cluster IDs**: Nodes are in different etcd clusters - need force-new-cluster
+- **No leader**: Split-brain or quorum loss - check network and member list
+- **Unstarted member**: Node hasn't joined yet or failed to join - check logs
+- **3+ members**: Unexpected member entries from previous configs - need cleanup
+
+#### CIB Attributes Analysis
+
+**Key Indicators:**
+- standalone_node: which node (if any) is running alone
+- learner_node: which node (if any) is rejoining
+- force_new_cluster: which node should bootstrap new cluster
+- cluster_id: must match between nodes in healthy state
+- member_id: etcd member ID for each node
+
+**Analysis Questions:**
+1. Are there conflicting attributes set (e.g., both standalone and learner)?
+2. Do cluster_id values match between both nodes?
+3. Is force_new_cluster set when it shouldn't be?
+4. Are learner/standalone attributes stuck from previous operations?
+
+**Common Issues:**
+- **Stuck learner_node**: Previous rejoin didn't complete - may need manual cleanup
+- **Mismatched cluster_id**: Nodes diverged - need force-new-cluster recovery
+- **Stale force_new_cluster**: Attribute survived reboot when it shouldn't - manual cleanup needed
+
+#### System Logs Analysis
+
+**Key Patterns to Search:**
+
+**Pacemaker Logs:**
+- "Failed" - resource failures
+- "fencing" - stonith operations
+- "could not" - operation failures
+- "timeout" - timing issues
+- "certificate" - cert problems
+
+**Corosync Logs:**
+- "quorum" - quorum changes
+- "lost" - connection losses
+- "join" - membership changes
+- "totem" - ring protocol issues
+
+**Etcd Logs:**
+- "panic" - fatal errors
+- "error" - general errors
+- "certificate" - cert issues
+- "member" - membership changes
+- "leader" - leadership changes
+- "database space exceeded" - quota issues
+- "mvcc: database space exceeded" - DB full
+
+### Troubleshooting Decision Tree
+
+Use this decision tree to systematically diagnose issues:
+
+```
+START: Etcd not working as expected
+│
+├─> Can you access cluster VMs via Ansible?
+│   ├─ NO → Fix Ansible connectivity first (check inventory, SSH keys, ProxyJump)
+│   └─ YES → Continue
+│
+├─> Is Pacemaker running on both nodes? (systemctl status pacemaker)
+│   ├─ NO → Start Pacemaker: systemctl start pacemaker
+│   └─ YES → Continue
+│
+├─> Do both nodes show as online in pcs status?
+│   ├─ NO → Check which node is offline
+│   │      ├─ Node shows UNCLEAN → Fencing failed
+│   │      │  └─ ACTION: Check stonith status, fence agent config, BMC access
+│   │      └─ Node shows offline → Network or Pacemaker issue
+│   │         └─ ACTION: Check corosync logs, network connectivity
+│   └─ YES → Continue
+│
+├─> Does cluster have quorum? (pcs status shows "quorum")
+│   ├─ NO → Investigate corosync/quorum issues
+│   │      └─ ACTION: Check corosync logs for membership changes
+│   └─ YES → Continue
+│
+├─> Is etcd resource started? (pcs resource status)
+│   ├─ NO → Check for failed actions
+│   │      ├─ Failed actions present → Resource failed to start
+│   │      │  └─ ACTION: Check failure reason, fix root cause, run pcs resource cleanup
+│   │      └─ No failed actions → Check constraints
+│   │         └─ ACTION: Review pcs constraint list, check node attributes
+│   └─ YES → Continue
+│
+├─> Is etcd container running on expected nodes? (podman ps)
+│   ├─ NO → Container not started or crashed
+│   │      └─ ACTION: Check podman logs for errors (certs, corruption, config)
+│   └─ YES → Continue
+│
+├─> Check cluster IDs in CIB attributes on both nodes
+│   ├─ DIFFERENT → Nodes are in separate etcd clusters!
+│   │      └─ ACTION: Use force-new-cluster helper to recover
+│   └─ SAME → Continue
+│
+├─> Check etcd member list (podman exec etcd etcdctl member list)
+│   ├─ Lists unexpected members (>2 members) → Stale members from previous config
+│   │      └─ ACTION: Remove stale members with etcdctl member remove
+│   ├─ Shows "unstarted" members → Node hasn't joined yet
+│   │      └─ ACTION: Check logs on unstarted node, may need cleanup and rejoin
+│   └─ Lists 2 members, both started → Continue
+│
+├─> Check etcd endpoint health (podman exec etcd etcdctl endpoint health)
+│   ├─ Unhealthy → Network or performance issues
+│   │      └─ ACTION: Check network latency, system load, disk I/O
+│   └─ Healthy → Continue
+│
+├─> Check etcd endpoint status (podman exec etcd etcdctl endpoint status)
+│   ├─ No leader → Leadership election failing
+│   │      └─ ACTION: Check logs for raft errors, verify member communication
+│   ├─ Leader elected but errors in logs → Operational issues
+│   │      └─ ACTION: Investigate specific errors (disk full, corruption, etc.)
+│   └─ Leader elected, no errors → Cluster appears healthy
+│
+└─> If still experiencing issues → Check OpenShift integration
+    ├─ Etcd operator degraded? (oc get co etcd)
+    │  └─ ACTION: Review operator conditions, check for cert rotation, API issues
+    └─ Check for related operator degradation (oc get co)
+       └─ ACTION: Review degraded operators, may indicate cluster-wide issues
+```
+
+### Error Pattern Matching Guidelines
+
+When analyzing logs and status output, look for these common patterns:
+
+#### Certificate Issues
+**Symptoms:**
+- "certificate has expired" in logs
+- "x509: certificate" errors
+- etcd container exits immediately
+- TLS handshake failures
+
+**Diagnosis:**
+```bash
+# Check cert expiration on nodes
+sudo podman exec etcd ls -la /etc/kubernetes/static-pod-resources/etcd-certs/
+# Look at recent cert-related log messages
+sudo journalctl --grep certificate --since "2 hours ago"
+```
+
+**Resolution:**
+- Wait for automatic cert rotation (if in progress)
+- Verify etcd operator is healthy and can rotate certs
+- Check machine config pool status for cert updates
+
+#### Split-Brain / Cluster ID Mismatch
+**Symptoms:**
+- Different cluster_id in CIB attributes between nodes
+- Nodes can't join each other's cluster
+- "cluster ID mismatch" in logs
+- Etcd won't start on one or both nodes
+
+**Diagnosis:**
+```bash
+# Compare cluster IDs
+ansible cluster_vms -i inventory.ini -m shell \
+  -a "crm_attribute --query --name cluster_id" -b
+```
+
+**Resolution:**
+- Use force-new-cluster helper playbook
+- Designate one node as leader (first in inventory)
+- Follower will resync from leader
+
+#### Resource Failures / Failed Actions
+**Symptoms:**
+- pcs status shows "Failed Resource Actions"
+- Resource shows as "Stopped" but should be running
+- Migration failures
+
+**Diagnosis:**
+```bash
+# Check detailed failure info
+sudo pcs resource status --full
+sudo pcs resource failcount show etcd
+```
+
+**Resolution:**
+1. Identify and fix root cause (see logs)
+2. Run: `sudo pcs resource cleanup etcd`
+3. Verify resource starts successfully
+
+#### Fencing Failures
+**Symptoms:**
+- Node shows as "UNCLEAN" in pcs status
+- "fencing failed" in logs
+- Stonith errors
+- Cluster can't recover from node failure
+
+**Diagnosis:**
+```bash
+# Check stonith status and configuration
+sudo pcs stonith status
+sudo pcs stonith show
+# Check fence agent logs
+sudo journalctl -u pacemaker --grep fence --since "1 hour ago"
+```
+
+**Resolution:**
+- Verify BMC/RedFish access from both nodes
+- Check fence agent credentials
+- Ensure network connectivity to BMC interfaces
+- Review stonith timeout settings
+- Test fence agent manually: `sudo fence_redfish -a <bmc_ip> -l <user> -p <pass> -o status`
+
 ## Key Context
 
 ### Cluster States
@@ -152,6 +419,56 @@ Based on your analysis, provide:
 - Surviving node restarts etcd as cluster-of-one
 - New cluster ID is assigned
 - Failed node discards old DB and resyncs on restart
+
+## Available Remediation Tools
+
+### Pacemaker Resource Cleanup
+Use `pcs resource cleanup` to clear failed resource states and retry operations:
+
+```bash
+# Clean up etcd resource on specific node
+sudo pcs resource cleanup etcd <node-name>
+
+# Clean up etcd resource on all nodes
+sudo pcs resource cleanup etcd
+```
+
+**When to use:**
+- After fixing underlying issues (certificates, network, etc.)
+- When resource shows as failed but root cause is resolved
+- To retry resource start after transient failures
+- After manual CIB attribute changes
+
+### Force New Cluster Helper
+Ansible playbook at `helpers/force-new-cluster.yml` automates cluster recovery when both nodes have stopped etcd or cluster IDs are mismatched.
+
+**What it does:**
+1. Disables stonith temporarily for safety
+2. Takes etcd snapshots on both nodes (if etcd not running)
+3. Clears conflicting CIB attributes (learner_node, standalone_node)
+4. Sets force_new_cluster attribute on leader node (first in inventory)
+5. Removes follower from etcd member list (if etcd running on leader)
+6. Runs `pcs resource cleanup etcd` on both nodes
+7. Re-enables stonith
+8. Verifies recovery
+
+**Usage:**
+```bash
+ansible-playbook helpers/force-new-cluster.yml -i deploy/openshift-clusters/inventory.ini
+```
+
+**When to use:**
+- Both nodes show different etcd cluster IDs
+- Etcd is not running on either node and won't start
+- After ungraceful disruptions that left cluster in inconsistent state
+- Manual recovery attempts have failed
+- Need to bootstrap from one node as new cluster
+
+**Precautions:**
+- Only use when normal recovery procedures fail
+- Ensure follower node can afford to lose its etcd data
+- Leader (first node in inventory) will become the source of truth
+- This creates a NEW cluster, follower will resync from leader
 
 ## Reference Documentation
 

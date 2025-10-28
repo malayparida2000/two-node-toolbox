@@ -58,6 +58,14 @@ This project is for developing a Claude Code skill that helps troubleshoot etcd 
      - `moving.rst` - Resource movement and migration
      - `options.rst` - Configuration options
 
+4. **Remediation Tools**: `helpers/`
+   - `force-new-cluster.yml` - Ansible playbook for automated cluster recovery
+     - Sets force_new_cluster CIB attribute on leader node
+     - Clears conflicting attributes (learner_node, standalone_node)
+     - Removes follower from etcd member list
+     - Creates etcd snapshots before recovery
+     - Handles both scenarios: etcd running on leader, or etcd stopped on both nodes
+
 ## Technical Approach
 
 ### Phase 1: Validation
