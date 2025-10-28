@@ -1,17 +1,17 @@
-# Etcd Troubleshooting Slash Command - Project File
+# Etcd Troubleshooting Skill - Project File
 
 ## Project Overview
 
-This project is for developing a Claude Code slash command that helps troubleshoot etcd issues on two-node with fencing OpenShift clusters. The command will leverage Ansible to access cluster VMs directly and analyze etcd health, pacemaker status, and relevant system logs to provide diagnostic insights and troubleshooting procedures.
+This project is for developing a Claude Code skill that helps troubleshoot etcd issues on two-node with fencing OpenShift clusters. The skill enables Claude to iteratively diagnose and resolve issues by leveraging Ansible to access cluster VMs directly and analyze etcd health, pacemaker status, and relevant system logs to provide diagnostic insights and troubleshooting procedures.
 
 ## Objectives
 
-1. Create a slash command that validates direct Ansible access to cluster VMs
+1. Provide troubleshooting expertise that validates direct Ansible access to cluster VMs
 2. Gather etcd and Pacemaker status using appropriate commands
 3. Collect and analyze journalctl logs for both Pacemaker and etcd services
 4. Analyze the collected data to identify common issues
-5. Propose a structured troubleshooting procedure to the user
-6. Provide actionable recommendations based on the analysis
+5. Propose and execute structured troubleshooting procedures iteratively
+6. Provide actionable recommendations based on ongoing analysis
 
 ## Target Environment
 
