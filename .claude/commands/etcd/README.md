@@ -32,7 +32,7 @@ The etcd troubleshooting skill enables Claude to interactively diagnose and reso
 │   ├── failures.md
 │   └── ... (other etcd docs)
 └── pacemaker/                          # Pacemaker documentation
-    ├── podman-etcd.sh                  # The resource agent script
+    ├── podman-etcd.txt                 # The resource agent script (reference)
     └── Pacemaker_Administration/       # Pacemaker admin guides
 ```
 
