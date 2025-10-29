@@ -61,3 +61,13 @@ See [deploy/openshift-clusters/README-external-host.md](deploy/openshift-cluster
 **Two-Node with Arbiter (TNA)**: Two master nodes with a separate arbiter node for quorum. See [docs/arbiter/README.md](docs/arbiter/README.md)
 
 **Two-Node with Fencing (TNF)**: Two master nodes with BMC-based fencing for automated node recovery. See [docs/fencing/README.md](docs/fencing/README.md)
+
+## First-Time Setup Helper
+
+If you're using [Claude Code](https://claude.ai/code), use the `/setup` command to get interactive help configuring the repository for first-time use. It will guide you through:
+- Copying configuration files from templates
+- Setting up credentials and authentication
+- Installing required dependencies
+- Validating your setup
+
+Run `/setup` to begin, or `/setup <method>` to configure a specific deployment method (aws, external, kcli, dev-scripts).
