@@ -16,7 +16,7 @@ Based on the argument provided (or user's interactive choice), guide them throug
 
 1. **Check current state** - Verify what's already configured
 2. **Explain prerequisites** - Check if required tools/files are present
-3. **Guide file setup** - Help copy templates and configure files
+3. **Guide file setup** - Help copy templates and configure files (ONE STEP AT A TIME)
 4. **Provide resource links** - Give URLs for external resources they need
 5. **Validate configuration** - Check if files are properly set up
 6. **Suggest next steps** - Provide commands to run next
@@ -209,17 +209,51 @@ Based on the argument provided (or user's interactive choice), guide them throug
 2. **If no argument or unclear**, ask the user interactively what they want to set up
    - Present options: external, aws, kcli, dev-scripts, all
    - Default suggestion: aws + dev-scripts
-3. **For each selected configuration**:
+3. **For each selected configuration method**:
    - Announce what you're configuring
    - Check prerequisites and current state
-   - Guide through file creation/copying
-   - Provide external links for resources they need to obtain
-   - Validate the configuration
+   - **Process ONE step at a time** following this pattern:
+     a. Identify the next action needed (copy file, edit file, install package, etc.)
+     b. Provide clear instructions for that ONE action
+     c. **STOP and wait for user confirmation that the step is complete**
+     d. When user resumes, **verify the step was completed** before proceeding
+     e. Only after verification, move to the next step
+4. **After all steps for a method are complete**:
+   - Perform final validation
    - Suggest next steps
-4. **Provide a summary** at the end with:
-   - What was configured
-   - Any missing prerequisites or warnings
-   - Recommended next commands
+   - If configuring multiple methods, move to the next method
+
+## Interactive Step-by-Step Pattern
+
+**CRITICAL**: You must follow this pattern for EVERY action that requires user input:
+
+1. **Present the action**: "Next, we need to [action]. Here's how..."
+2. **Give specific instructions**: Commands to run, files to edit, links to visit
+3. **STOP**: End your response and wait for the user
+4. **On resume**:
+   - First, check if the step was completed (read files, run validation commands)
+   - If complete: Acknowledge and move to next step
+   - If incomplete: Ask what went wrong and help troubleshoot
+   - Never assume a step is complete without verification
+
+**Example flow:**
+
+```
+Assistant: "Let's start by copying the inventory template. Please run:
+`cp deploy/openshift-clusters/inventory.ini.sample deploy/openshift-clusters/inventory.ini`
+
+Once you've done this, let me know and I'll verify it's ready."
+
+[STOP - Wait for user]
+
+User: "Done"
+
+Assistant: [Checks if file exists]
+
+"Great\! I can see the inventory file has been created. Now let's edit it with your host information..."
+
+[Proceed to next step]
+```
 
 ## Important Notes
 
@@ -227,7 +261,9 @@ Based on the argument provided (or user's interactive choice), guide them throug
 - Use file path links in markdown format: `[filename](path/to/file)` for VSCode clickability
 - Distinguish between files that can be copied as-is vs. files that need editing
 - Be clear about which values are required vs. optional
-- Provide validation commands users can run themselves
+- After each user action, VERIFY it was completed before proceeding
 - If prerequisites are missing, clearly state what needs to be installed
 - Remember that some files are shared between methods (inventory.ini, pull-secret.json)
 - The main README states defaults: "By default, we'll configure the AWS hypervisor and the dev-scripts installation"
+- **NEVER skip verification steps** - always confirm each action was completed successfully
+- **STOP after giving each instruction** - wait for user to complete it and confirm
