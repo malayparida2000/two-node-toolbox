@@ -61,3 +61,7 @@ See [deploy/openshift-clusters/README-external-host.md](deploy/openshift-cluster
 **Two-Node with Arbiter (TNA)**: Two master nodes with a separate arbiter node for quorum. See [docs/arbiter/README.md](docs/arbiter/README.md)
 
 **Two-Node with Fencing (TNF)**: Two master nodes with BMC-based fencing for automated node recovery. See [docs/fencing/README.md](docs/fencing/README.md)
+
+## Troubleshooting with Claude Code
+
+If you're using [Claude Code](https://claude.ai/code), it can help you troubleshoot etcd issues on two-node fencing clusters. Simply ask Claude to diagnose your etcd problems and it will automatically collect diagnostics, analyze the cluster state, and recommend remediation steps. See [.claude/commands/etcd/README.md](.claude/commands/etcd/README.md) for details.
