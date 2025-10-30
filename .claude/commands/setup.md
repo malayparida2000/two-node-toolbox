@@ -110,12 +110,15 @@ Based on the argument provided (or user's interactive choice), guide them throug
    - Same as external host section (skip if already configured)
 
 2. **Pull secret**: [deploy/openshift-clusters/roles/kcli/kcli-install/files/pull-secret.json](deploy/openshift-clusters/roles/kcli/kcli-install/files/pull-secret.json)
-   - Check if file exists
-   - User gets pull secret from: https://cloud.redhat.com/openshift/install/pull-secret
-   - **For CI builds**: Must include `registry.ci.openshift.org` access
-     - Get CI access: https://console-openshift-console.apps.ci.l2s4.p1.openshiftapps.com
-     - Login → Click name → "Copy login command" → "Display Token"
-   - Suggest creating file and pasting content
+   - **NOTE**: This is the same pull secret used by dev-scripts
+   - Check if file exists here OR at [deploy/openshift-clusters/roles/dev-scripts/install-dev/files/pull-secret.json](deploy/openshift-clusters/roles/dev-scripts/install-dev/files/pull-secret.json)
+   - If it exists in either location, offer to copy it to the other location
+   - If it doesn't exist anywhere:
+     - User gets pull secret from: https://cloud.redhat.com/openshift/install/pull-secret
+     - **For CI builds**: Must include `registry.ci.openshift.org` access
+       - Get CI access: https://console-openshift-console.apps.ci.l2s4.p1.openshiftapps.com
+       - Login → Click name → "Copy login command" → "Display Token"
+     - Suggest creating file and pasting content
 
 3. **SSH key on local machine**:
    - Check if `~/.ssh/id_ed25519.pub` exists
@@ -176,9 +179,12 @@ Based on the argument provided (or user's interactive choice), guide them throug
    - **Config reference**: https://github.com/openshift-metal3/dev-scripts/blob/master/config_example.sh
 
 3. **Pull secret**: [deploy/openshift-clusters/roles/dev-scripts/install-dev/files/pull-secret.json](deploy/openshift-clusters/roles/dev-scripts/install-dev/files/pull-secret.json)
-   - Check if file exists
-   - User gets pull secret from: https://cloud.redhat.com/openshift/install/pull-secret
-   - Suggest creating file and pasting content
+   - **NOTE**: This is the same pull secret used by kcli
+   - Check if file exists here OR at [deploy/openshift-clusters/roles/kcli/kcli-install/files/pull-secret.json](deploy/openshift-clusters/roles/kcli/kcli-install/files/pull-secret.json)
+   - If it exists in either location, offer to copy it to the other location
+   - If it doesn't exist anywhere:
+     - User gets pull secret from: https://cloud.redhat.com/openshift/install/pull-secret
+     - Suggest creating file and pasting content
 
 4. **SSH key configuration**:
    - Default location: `~/.ssh/id_ed25519.pub`
@@ -225,10 +231,25 @@ Based on the argument provided (or user's interactive choice), guide them throug
 
 ## Interactive Step-by-Step Pattern
 
-**CRITICAL**: You must follow this pattern for EVERY action that requires user input:
+**CRITICAL**: You must follow this pattern for EVERY action:
 
-1. **Present the action**: "Next, we need to [action]. Here's how..."
-2. **Give specific instructions**: Commands to run, files to edit, links to visit
+### For Actions Claude Can Execute (file operations, checks, etc.):
+
+1. **Announce and execute**: "Let me [action]..." then use the appropriate tool
+   - File copying: Use Bash tool to copy files
+   - File reading: Use Read tool to check files
+   - Validation: Use Bash/Read tools to verify
+2. **If user rejects the tool**: Fall back to manual instructions
+   - Provide the command for the user to run
+   - Ask them to let you know when done
+3. **After execution (or user completion)**:
+   - Verify the result
+   - Move to next step or stop if user input is needed
+
+### For Actions Requiring User Input (editing files, obtaining credentials, etc.):
+
+1. **Present the action**: "Next, you need to [action]. Here's how..."
+2. **Give specific instructions**: What to edit, where to get credentials, etc.
 3. **STOP**: End your response and wait for the user
 4. **On resume**:
    - First, check if the step was completed (read files, run validation commands)
@@ -236,13 +257,18 @@ Based on the argument provided (or user's interactive choice), guide them throug
    - If incomplete: Ask what went wrong and help troubleshoot
    - Never assume a step is complete without verification
 
-**Example flow:**
+**Example flow (Claude executes):**
 
 ```
-Assistant: "Let's start by copying the inventory template. Please run:
-`cp deploy/openshift-clusters/inventory.ini.sample deploy/openshift-clusters/inventory.ini`
+Assistant: "Let me copy the inventory template for you."
+[Uses Bash tool: cp deploy/openshift-clusters/inventory.ini.sample deploy/openshift-clusters/inventory.ini]
 
-Once you've done this, let me know and I'll verify it's ready."
+"Great! I've created the inventory file. Now you need to edit it with your host information. Please update:
+- The host IP address
+- The SSH user
+- (Optional) sudo password
+
+Let me know when you've edited the file."
 
 [STOP - Wait for user]
 
@@ -255,6 +281,29 @@ Assistant: [Checks if file exists]
 [Proceed to next step]
 ```
 
+## What Claude Should Execute vs. What Requires User Action
+
+### Claude Should Execute (Proactively):
+- Copying template files (cp commands)
+- Reading files to check if they exist
+- Validating file contents (jq, grep, etc.)
+- Checking prerequisites (which, ls, etc.)
+- Any read-only or safe file operations
+
+### User Must Do (Claude provides instructions):
+- Editing files with user-specific values (IP addresses, credentials, etc.)
+- Obtaining external resources (pull secrets, CI tokens, activation keys)
+- Installing packages (ansible-galaxy, dnf, etc.) - unless user explicitly asks
+- Setting environment variables in their shell
+- Running deployment playbooks (final steps)
+
+### Fallback Pattern:
+If user rejects a tool use that Claude tried to execute:
+1. Apologize briefly
+2. Provide the manual command
+3. Ask user to run it and confirm when done
+4. Continue with verification step when they resume
+
 ## Important Notes
 
 - Always check if files already exist before suggesting to create them
@@ -263,7 +312,10 @@ Assistant: [Checks if file exists]
 - Be clear about which values are required vs. optional
 - After each user action, VERIFY it was completed before proceeding
 - If prerequisites are missing, clearly state what needs to be installed
-- Remember that some files are shared between methods (inventory.ini, pull-secret.json)
+- Remember that some files are shared between methods:
+  - `inventory.ini` is shared between external, kcli, and dev-scripts
+  - `pull-secret.json` is shared between kcli and dev-scripts (same file, different locations)
+  - When configuring multiple methods, check if shared files already exist and offer to copy them instead of recreating
 - The main README states defaults: "By default, we'll configure the AWS hypervisor and the dev-scripts installation"
 - **NEVER skip verification steps** - always confirm each action was completed successfully
 - **STOP after giving each instruction** - wait for user to complete it and confirm
