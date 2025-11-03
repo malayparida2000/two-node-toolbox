@@ -17,7 +17,8 @@ The etcd troubleshooting skill enables Claude to interactively diagnose and reso
 .claude/commands/etcd/
 ├── README.md                           # This file
 ├── PROJECT.md                          # Project specification and checklist
-├── TROUBLESHOOTING_SKILL.md           # Skill definition and guidelines
+├── QUICK_REFERENCE.md                  # Fast troubleshooting guide (START HERE)
+├── TROUBLESHOOTING_SKILL.md           # Detailed skill definition and guidelines
 ├── playbooks/                          # Ansible playbooks
 │   ├── validate-access.yml             # Validate Ansible connectivity
 │   └── collect-diagnostics.yml         # Collect VM-level diagnostics
@@ -38,9 +39,27 @@ The etcd troubleshooting skill enables Claude to interactively diagnose and reso
 
 ## Quick Start
 
+### For Fast Troubleshooting
+
+**Start with [QUICK_REFERENCE.md](QUICK_REFERENCE.md)** for common issues and immediate fixes.
+
+The quick reference covers:
+- Common failure patterns with instant fixes
+- One-command diagnostics
+- Step-by-step remediation for 7 most frequent issues
+- Quick verification checklist
+
+### For Complex Issues
+
+Use the detailed [TROUBLESHOOTING_SKILL.md](TROUBLESHOOTING_SKILL.md) when:
+- Issue doesn't match common patterns
+- Multiple components are failing
+- Need deeper architectural understanding
+- Automated fixes don't resolve the problem
+
 ### Activating the Skill
 
-In Claude Code, the etcd troubleshooting skill is activated by reading the TROUBLESHOOTING_SKILL.md file or referencing it in your request:
+In Claude Code, reference the troubleshooting skill in your request:
 
 ```
 "Help me troubleshoot etcd issues on my two-node cluster. Use the etcd troubleshooting skill."
@@ -250,24 +269,32 @@ ansible-playbook helpers/force-new-cluster.yml \
 
 ## Reference Documentation
 
-### Etcd Operations
+### Troubleshooting Guides (by detail level)
 
-Slash commands for detailed etcd information:
-- `/etcd:etcd-ops-guide:clustering` - Cluster membership operations
-- `/etcd:etcd-ops-guide:recovery` - Recovery procedures
-- `/etcd:etcd-ops-guide:monitoring` - Monitoring and health checks
-- `/etcd:etcd-ops-guide:failures` - Failure scenarios
-- `/etcd:etcd-ops-guide:data_corruption` - Data corruption handling
+1. **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - Start here for common issues
+   - 7 most frequent failure patterns with fixes
+   - Quick diagnostics commands
+   - Fast verification checklist
 
-Or read files directly in `.claude/commands/etcd/etcd-ops-guide/`
+2. **[TROUBLESHOOTING_SKILL.md](TROUBLESHOOTING_SKILL.md)** - Detailed methodology
+   - Systematic analysis frameworks
+   - Component-specific diagnosis
+   - Decision trees and error patterns
 
-### Pacemaker Administration
+3. **Etcd Operations** - Deep reference via slash commands:
+   - `/etcd:etcd-ops-guide:clustering` - Cluster membership operations
+   - `/etcd:etcd-ops-guide:recovery` - Recovery procedures
+   - `/etcd:etcd-ops-guide:monitoring` - Monitoring and health checks
+   - `/etcd:etcd-ops-guide:failures` - Failure scenarios
+   - `/etcd:etcd-ops-guide:data_corruption` - Data corruption handling
 
-Documentation in `.claude/commands/etcd/pacemaker/Pacemaker_Administration/`:
-- `troubleshooting.rst` - Pacemaker troubleshooting guide
-- `tools.rst` - Command-line tools
-- `agents.rst` - Resource agents
-- `administrative.rst` - Administrative tasks
+   Or read files directly in `.claude/commands/etcd/etcd-ops-guide/`
+
+4. **Pacemaker Administration** - Deep reference in `.claude/commands/etcd/pacemaker/Pacemaker_Administration/`:
+   - `troubleshooting.rst` - Pacemaker troubleshooting guide
+   - `tools.rst` - Command-line tools
+   - `agents.rst` - Resource agents
+   - `administrative.rst` - Administrative tasks
 
 ## Development and Testing
 
