@@ -28,6 +28,24 @@ This skill enables Claude to:
 - Verify cluster access with `oc get nodes`
 - Remember proxy requirement for all subsequent oc commands
 
+**IMPORTANT: No Cluster Access Scenario**
+
+If OpenShift cluster API access is unavailable (which is expected when etcd is down), **all diagnostics and remediation must be performed via Ansible** using direct VM access. The troubleshooting workflow remains fully functional using only:
+
+- Ansible ad-hoc commands to cluster VMs
+- Ansible playbooks for diagnostics collection
+- Direct SSH access to nodes via Ansible
+
+When cluster access is unavailable:
+- ✓ You can still diagnose and fix etcd issues completely
+- ✓ All Pacemaker operations work via Ansible
+- ✓ All etcd container operations work via Ansible (podman commands)
+- ✓ All logs are accessible via Ansible (journalctl commands)
+- ✗ Cannot query OpenShift operators or cluster-level resources
+- ✗ Cannot use oc commands for verification (use Ansible equivalents instead)
+
+This is a **normal scenario** when etcd is down - proceed with VM-based troubleshooting.
+
 ### 2. Collect Data
 
 Use Ansible to execute commands on cluster VMs (all commands require sudo/become):

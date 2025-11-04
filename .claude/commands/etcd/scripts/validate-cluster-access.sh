@@ -61,8 +61,8 @@ section "Validating OpenShift Cluster Access"
 
 # Check if oc is available
 if ! command -v oc &> /dev/null; then
-    error "oc command not found in PATH"
-    EXIT_CODE=1
+    warn "oc command not found in PATH"
+    warn "Cluster API access will not be available (this is OK if etcd is down)"
 else
     info "oc command found"
 
@@ -70,6 +70,7 @@ else
     if oc version --request-timeout=5s &>/dev/null; then
         info "Direct cluster access successful"
         PROXY_REQUIRED=false
+        CLUSTER_ACCESS=true
     else
         warn "Direct cluster access failed"
 
@@ -84,35 +85,35 @@ else
             if oc version --request-timeout=5s &>/dev/null; then
                 info "Cluster access via proxy successful"
                 PROXY_REQUIRED=true
+                CLUSTER_ACCESS=true
             else
-                error "Cluster access failed even with proxy"
-                EXIT_CODE=1
+                warn "Cluster access failed even with proxy"
+                warn "This is expected if etcd is down - will rely on direct VM access"
+                CLUSTER_ACCESS=false
             fi
         else
-            error "No proxy.env found at: ${PROXY_ENV_PATH}"
-            error "Cluster access unavailable"
-            EXIT_CODE=1
+            warn "No proxy.env found at: ${PROXY_ENV_PATH}"
+            warn "Cluster access unavailable - this is OK if etcd is down"
+            CLUSTER_ACCESS=false
         fi
     fi
 
     # If we have cluster access, test basic operations
-    if [ ${EXIT_CODE} -eq 0 ]; then
+    if [ "${CLUSTER_ACCESS:-false}" = "true" ]; then
         section "Testing OpenShift Cluster Operations"
 
         if oc get nodes &>/dev/null; then
             info "Successfully queried cluster nodes"
             oc get nodes -o wide | sed 's/^/  /'
         else
-            error "Failed to query cluster nodes"
-            EXIT_CODE=1
+            warn "Failed to query cluster nodes (may be expected if etcd is down)"
         fi
 
         if oc get co etcd &>/dev/null; then
             info "Successfully queried etcd cluster operator"
             oc get co etcd | sed 's/^/  /'
         else
-            error "Failed to query etcd cluster operator"
-            EXIT_CODE=1
+            warn "Failed to query etcd cluster operator (may be expected if etcd is down)"
         fi
     fi
 fi
