@@ -48,9 +48,23 @@ This is a **normal scenario** when etcd is down - proceed with VM-based troubles
 
 ### 2. Collect Data
 
-Use Ansible to execute commands on cluster VMs (all commands require sudo/become):
+**IMPORTANT: Target the Correct Host Group**
 
-**Pacemaker Status:**
+- **All etcd/Pacemaker commands** must target the `cluster_vms` host group (the OpenShift cluster nodes)
+- **VM lifecycle commands** (start/stop VMs) target the hypervisor host
+- Use Ansible ad-hoc commands with `-m shell` or run playbooks that target `cluster_vms`
+- All commands on cluster VMs require sudo/become privileges
+
+**Example Ansible targeting:**
+```bash
+# Correct - targets cluster VMs
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a "pcs status" -b
+
+# Incorrect - would target hypervisor
+ansible hypervisor -i deploy/openshift-clusters/inventory.ini -m shell -a "pcs status" -b
+```
+
+**Pacemaker Status (on cluster_vms):**
 ```bash
 sudo pcs status
 sudo pcs resource status
@@ -58,28 +72,28 @@ sudo pcs constraint list
 sudo crm_mon -1
 ```
 
-**Etcd Container Status:**
+**Etcd Container Status (on cluster_vms):**
 ```bash
 sudo podman ps -a --filter name=etcd
 sudo podman inspect etcd
 sudo podman logs --tail 100 etcd
 ```
 
-**Etcd Cluster Health:**
+**Etcd Cluster Health (on cluster_vms):**
 ```bash
 sudo podman exec etcd etcdctl member list -w table
 sudo podman exec etcd etcdctl endpoint health -w table
 sudo podman exec etcd etcdctl endpoint status -w table
 ```
 
-**System Logs:**
+**System Logs (on cluster_vms):**
 ```bash
 sudo journalctl -u pacemaker --since "1 hour ago" -n 200
 sudo journalctl -u corosync --since "1 hour ago" -n 100
 sudo journalctl --grep etcd --since "1 hour ago" -n 200
 ```
 
-**Cluster Attributes:**
+**Cluster Attributes (on cluster_vms):**
 ```bash
 sudo crm_attribute --query --name standalone_node
 sudo crm_attribute --query --name learner_node
