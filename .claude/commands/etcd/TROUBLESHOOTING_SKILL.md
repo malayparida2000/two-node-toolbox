@@ -529,3 +529,10 @@ Provide clear, concise diagnostics with:
 - Warn user clearly if proxy.env is required but missing
 - Always use sudo/become for commands on cluster VMs via Ansible
 - Be specific about which node to run commands on when relevant
+- **CRITICAL: Always target the `cluster_vms` host group for all etcd/Pacemaker operations**
+  - Never target the `hypervisor` host for etcd-related commands
+  - The hypervisor is only for VM lifecycle management (virsh, kcli commands)
+  - All Pacemaker, etcd container, and cluster diagnostics run on cluster VMs
+- When cluster API access is unavailable, rely exclusively on Ansible-based VM access
+  - This is normal and expected when etcd is down
+  - All troubleshooting can be completed without oc commands

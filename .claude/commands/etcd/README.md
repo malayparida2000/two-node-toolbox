@@ -151,6 +151,30 @@ When you know the general area of the problem:
 
 ## Key Features
 
+### Host Group Targeting
+
+**IMPORTANT:** All etcd and Pacemaker diagnostics must target the correct Ansible host group:
+
+- **`cluster_vms`** - Use for all etcd, Pacemaker, and cluster diagnostics
+  - All pcs commands
+  - All podman commands for etcd containers
+  - All etcdctl commands
+  - All journalctl commands for cluster logs
+
+- **`hypervisor`** - Only for VM lifecycle management
+  - virsh commands to start/stop VMs
+  - kcli commands for cluster management
+  - Do NOT use for etcd-related operations
+
+**Example:**
+```bash
+# Correct - targets cluster VMs
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a "pcs status" -b
+
+# Incorrect - would target hypervisor instead of cluster nodes
+ansible hypervisor -i deploy/openshift-clusters/inventory.ini -m shell -a "pcs status" -b
+```
+
 ### Proxy Handling
 
 All scripts automatically detect and handle proxy requirements:

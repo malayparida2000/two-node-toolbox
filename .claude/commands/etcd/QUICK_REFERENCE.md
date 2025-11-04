@@ -6,6 +6,18 @@ Use this guide for quick diagnosis and remediation. For detailed analysis, refer
 
 ---
 
+## CRITICAL: Target the Correct Hosts
+
+**Always use `cluster_vms` host group for etcd/Pacemaker commands:**
+
+- ✓ **Correct:** `ansible cluster_vms -i inventory.ini -m shell -a "pcs status" -b`
+- ✗ **Wrong:** `ansible all -i inventory.ini ...` (would include hypervisor)
+- ✗ **Wrong:** `ansible hypervisor -i inventory.ini ...` (hypervisor has no etcd)
+
+The `hypervisor` is only for VM lifecycle (virsh/kcli). All etcd operations run on `cluster_vms`.
+
+---
+
 ## Quick Diagnostics
 
 **Collect all diagnostics automatically:**
@@ -15,13 +27,13 @@ source .claude/commands/etcd/scripts/collect-all-diagnostics.sh
 
 **Check cluster health quickly:**
 ```bash
-# Pacemaker status
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a "sudo pcs status" -b
+# Pacemaker status (on cluster VMs)
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a "sudo pcs status" -b
 
-# Etcd member list
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a "sudo podman exec etcd etcdctl member list -w table" -b
+# Etcd member list (on cluster VMs)
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a "sudo podman exec etcd etcdctl member list -w table" -b
 
-# OpenShift etcd operator
+# OpenShift etcd operator (if cluster access available)
 oc get co etcd -o yaml | grep -A10 "status:"
 ```
 
@@ -61,7 +73,7 @@ ansible <failed-node> -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo pcs resource cleanup etcd" -b
 
 # Monitor recovery
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo pcs status" -b
 ```
 
@@ -85,18 +97,18 @@ Network partition or simultaneous failures caused both nodes to start independen
 **Diagnosis:**
 ```bash
 # Check cluster IDs on both nodes
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo crm_attribute -G -n cluster_id" -b
 
 # Check which node is standalone
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo crm_attribute -G -n standalone_node" -b
 ```
 
 **Fix:**
 ```bash
 # Identify the node with more recent data (higher revision)
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo podman exec etcd etcdctl endpoint status -w table" -b
 
 # On the node with LESS data, clean etcd
@@ -106,11 +118,11 @@ ansible <old-node> -i deploy/openshift-clusters/inventory.ini -m shell -a \
    sudo pcs resource clear etcd" -b
 
 # Clear the force_new_cluster flag from CIB
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo crm_attribute -D -n force_new_cluster" -b
 
 # Cleanup and let Pacemaker recover
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo pcs resource cleanup etcd" -b
 ```
 
@@ -134,11 +146,11 @@ Corosync cluster lost quorum (needs 2 nodes, has <2).
 **Diagnosis:**
 ```bash
 # Check which nodes are online
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo pcs status | grep -A5 'Node List'" -b
 
 # Check corosync membership
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo corosync-cmapctl | grep members" -b
 ```
 
@@ -151,18 +163,18 @@ ansible <offline-node> -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo pcs cluster start" -b
 
 # Wait for quorum to be established
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo pcs status" -b
 ```
 
 **If both nodes online but no quorum (network issue):**
 ```bash
 # Check firewall/network connectivity between nodes
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo firewall-cmd --list-all" -b
 
 # Restart corosync cluster-wide
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo pcs cluster stop --all && sudo pcs cluster start --all" -b
 ```
 
@@ -186,7 +198,7 @@ OpenShift etcd operator learner promotion workflow stalled or conditions not met
 **Diagnosis:**
 ```bash
 # Check learner status
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo podman exec etcd etcdctl member list -w table" -b
 
 # Check etcd operator conditions
@@ -231,11 +243,11 @@ Expired or incorrect TLS certificates for etcd communication.
 **Diagnosis:**
 ```bash
 # Check certificate expiration
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo openssl x509 -in /etc/kubernetes/static-pod-certs/secrets/etcd-all-certs/etcd-serving-$(hostname).crt -noout -dates" -b
 
 # Check for cert errors in logs
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo podman logs etcd 2>&1 | grep -i 'certificate\|tls'" -b
 ```
 
@@ -272,26 +284,26 @@ Resource was manually banned or reached failure threshold causing automatic ban.
 **Diagnosis:**
 ```bash
 # Check for location constraints (bans)
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo pcs constraint list --full" -b
 
 # Check failure count
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo pcs resource failcount show etcd" -b
 ```
 
 **Fix:**
 ```bash
 # Remove all location constraints for etcd
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo pcs constraint list --full | grep 'location.*etcd' | cut -d' ' -f1 | xargs -I {} sudo pcs constraint remove {}" -b
 
 # Or clear specific node ban
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo pcs resource clear etcd" -b
 
 # Reset failure counts
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo pcs resource cleanup etcd" -b
 ```
 
@@ -315,30 +327,30 @@ Fencing agent can't reach BMC or authentication failure.
 **Diagnosis:**
 ```bash
 # Check stonith configuration
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo pcs stonith config" -b
 
 # Test fencing manually
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo pcs stonith fence <node>" -b
 
 # Check redfish connectivity
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "curl -k -u <user>:<pass> https://<bmc-ip>/redfish/v1/Systems" -b
 ```
 
 **Fix:**
 ```bash
 # Update stonith credentials if needed
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo pcs stonith update <node>_redfish password=<new-password>" -b
 
 # Confirm unclean node (if safe - node is really down)
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo pcs stonith confirm <node>" -b
 
 # Restart cluster after fencing fix
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo pcs cluster stop --all && sudo pcs cluster start --all" -b
 ```
 
@@ -355,16 +367,16 @@ After any fix, verify:
 
 ```bash
 # 1. Pacemaker cluster healthy
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a "sudo pcs status" -b
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a "sudo pcs status" -b
 # Expected: Both nodes Online, quorum achieved, no failed actions
 
 # 2. Etcd members healthy
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo podman exec etcd etcdctl endpoint health -w table" -b
 # Expected: All endpoints healthy
 
 # 3. Etcd member list correct
-ansible all -i deploy/openshift-clusters/inventory.ini -m shell -a \
+ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo podman exec etcd etcdctl member list -w table" -b
 # Expected: 2 members, both started, both IS_LEARNER=false
 
