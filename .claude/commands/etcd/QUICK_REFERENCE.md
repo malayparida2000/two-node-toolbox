@@ -105,7 +105,21 @@ ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \
   "sudo crm_attribute -G -n standalone_node" -b
 ```
 
-**Fix:**
+**Fix (RECOMMENDED - Use Automated Playbook):**
+```bash
+# Use the automated force-new-cluster helper playbook
+ansible-playbook helpers/force-new-cluster.yml \
+  -i deploy/openshift-clusters/inventory.ini
+```
+
+This playbook automatically:
+- Takes snapshots for safety
+- Clears conflicting CIB attributes
+- Designates leader (first node in inventory) to force new cluster
+- Removes follower from member list
+- Cleans up and re-enables stonith
+
+**Fix (MANUAL - Only if playbook unavailable):**
 ```bash
 # Identify the node with more recent data (higher revision)
 ansible cluster_vms -i deploy/openshift-clusters/inventory.ini -m shell -a \

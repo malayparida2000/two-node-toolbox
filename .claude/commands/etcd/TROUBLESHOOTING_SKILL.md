@@ -379,10 +379,18 @@ ansible cluster_vms -i inventory.ini -m shell \
   -a "crm_attribute --query --name cluster_id" -b
 ```
 
-**Resolution:**
-- Use force-new-cluster helper playbook
-- Designate one node as leader (first in inventory)
-- Follower will resync from leader
+**Resolution (RECOMMENDED):**
+```bash
+# Use the automated force-new-cluster helper playbook
+ansible-playbook helpers/force-new-cluster.yml -i deploy/openshift-clusters/inventory.ini
+```
+
+This playbook:
+- Takes snapshots for safety
+- Clears conflicting CIB attributes
+- Designates leader (first node in inventory) to force new cluster
+- Removes follower from member list
+- Handles all cleanup and recovery steps automatically
 
 #### Resource Failures / Failed Actions
 **Symptoms:**
@@ -453,6 +461,16 @@ sudo journalctl -u pacemaker --grep fence --since "1 hour ago"
 - Failed node discards old DB and resyncs on restart
 
 ## Available Remediation Tools
+
+**IMPORTANT: Prefer Automated Tools**
+
+When dealing with cluster recovery scenarios (split-brain, mismatched cluster IDs, both nodes down), **always use the automated helper playbook first** before attempting manual recovery:
+
+```bash
+ansible-playbook helpers/force-new-cluster.yml -i deploy/openshift-clusters/inventory.ini
+```
+
+This playbook handles all the complex steps safely and is the recommended approach. Manual steps should only be used if the playbook is unavailable or fails.
 
 ### Pacemaker Resource Cleanup
 Use `pcs resource cleanup` to clear failed resource states and retry operations:
