@@ -54,42 +54,27 @@
       run_once: true
       changed_when: true
 
-    - name: Check if etcd is running on leader node
-      ansible.builtin.command: podman ps
+    - name: Disable etcd resource on leader node
       delegate_to: "{{ leader_node }}"
-      register: leader_etcd_status
-      changed_when: false
       run_once: true
-      failed_when: false
-
-    - name: Determine recovery scenario
-      ansible.builtin.set_fact:
-        leader_has_etcd: "{{ 'etcd' in leader_etcd_status.stdout }}"
-      run_once: true
-
-    - name: Handle scenario where no etcd is running on leader
-      when: not leader_has_etcd
       block:
-        - name: Take etcd snapshot on both nodes
-          ansible.builtin.copy:
-            src: "/var/lib/etcd/member/snap/db"
-            dest: "{{ snapshot_dir }}/{{ snapshot_name }}"
-            remote_src: true
-            owner: core
-            group: core
-            mode: '0644'
-
-        - name: Clean up old snapshots (keep last {{ snapshot_retention_count }})
-          ansible.builtin.shell: |
-            ls -1t {{ snapshot_dir }}/etcd-snapshot-*.db 2>/dev/null | tail -n +{{ snapshot_retention_count + 1 }} | xargs -r rm -f
-          args:
-            executable: /bin/bash
+        - name: Disable etcd resource
+          ansible.builtin.command: pcs resource disable etcd
           changed_when: true
-          failed_when: false
 
-        - name: Display snapshot location
+        - name: Wait for etcd to stop
+          ansible.builtin.shell: |
+            pcs status resources | grep etcd -A 1 | grep -E 'Started|Stopping'
+          register: etcd_stopping
+          changed_when: false
+          failed_when: false
+          until: etcd_stopping.rc != 0
+          retries: 60
+          delay: 5
+
+        - name: Display etcd stopped confirmation
           ansible.builtin.debug:
-            msg: "✓ etcd snapshot saved on {{ inventory_hostname }} to: {{ snapshot_dir }}/{{ snapshot_name }}"
+            msg: "Etcd resource is now stopped."
 
     - name: Clear CIB attributes on all nodes
       block:
@@ -186,90 +171,17 @@
               Unexpected force_new_cluster attribute on {{ follower_hostname }}
               Output: {{ follower_reboot_attrs.stdout }}
 
-    - name: Remove follower from etcd member list
-      delegate_to: "{{ leader_node }}"
-      run_once: true
-      when: leader_has_etcd
-      block:
-        - name: Get etcd member list
-          ansible.builtin.command: podman exec etcd etcdctl member list
-          register: etcd_member_list
-          changed_when: false
-
-        - name: Extract follower member ID by hostname
-          ansible.builtin.set_fact:
-            follower_member_id: "{{ (etcd_member_list.stdout_lines | select('search', follower_hostname) | first | split(','))[0] | default('') }}"
-          when: follower_hostname in etcd_member_list.stdout
-
-        - name: Extract follower member ID by unstarted state (fallback)
-          ansible.builtin.set_fact:
-            follower_member_id: "{{ (etcd_member_list.stdout_lines | select('search', 'unstarted') | first | split(','))[0] | default('') }}"
-          when:
-            - follower_hostname not in etcd_member_list.stdout
-            - "'unstarted' in etcd_member_list.stdout"
-
-        - name: Display etcd member list if follower not found
-          ansible.builtin.debug:
-            msg: |
-              Could not find follower {{ follower_hostname }} in etcd member list. Nothing to do.
-              Member list:
-              {{ etcd_member_list.stdout }}
-          when: follower_member_id is not defined or follower_member_id == ''
-
-        - name: Remove follower from etcd cluster
-          ansible.builtin.command: podman exec etcd etcdctl member remove {{ follower_member_id }}
-          when:
-            - follower_member_id is defined
-            - follower_member_id != ''
-          changed_when: true
-
-        - name: Display removal confirmation
-          ansible.builtin.debug:
-            msg: "Removing follower member ID: {{ follower_member_id }} ({{ follower_hostname }})"
-          when:
-            - follower_member_id is defined
-            - follower_member_id != ''
-
-    - name: Cleanup etcd resource on leader node
-      ansible.builtin.command: pcs resource cleanup etcd
+    - name: Enable etcd resource on leader node
+      ansible.builtin.command: pcs resource enable etcd
       delegate_to: "{{ leader_node }}"
       run_once: true
       changed_when: true
 
-    - name: Cleanup etcd resource on follower node
+    - name: Cleanup etcd resource to restore the cluster
       ansible.builtin.command: pcs resource cleanup etcd
-      delegate_to: "{{ follower_node }}"
+      delegate_to: "{{ leader_node }}"
       run_once: true
       changed_when: true
-
-    - name: Wait for etcd to potentially start (no-etcd scenario)
-      ansible.builtin.pause:
-        seconds: 10
-      when: not leader_has_etcd
-      run_once: true
-
-    - name: Re-check etcd status after cleanup (no-etcd scenario)
-      ansible.builtin.command: podman ps
-      delegate_to: "{{ leader_node }}"
-      register: leader_etcd_recheck
-      changed_when: false
-      run_once: true
-      when: not leader_has_etcd
-
-    - name: Display etcd recovery status
-      ansible.builtin.debug:
-        msg: |
-          {% if not leader_has_etcd %}
-          {% if 'etcd' in leader_etcd_recheck.stdout %}
-          ✓ Leader etcd is now running after cleanup.
-          {% else %}
-          ⚠ Leader etcd is still not running after cleanup. Manual intervention may be required.
-          CIB attributes have been set for force-new-cluster on {{ leader_hostname }}
-          {% endif %}
-          {% else %}
-          ✓ All force-new-cluster operations completed successfully.
-          {% endif %}
-      run_once: true
 
     - name: Re-enable stonith on leader node
       ansible.builtin.command: pcs property set stonith-enabled=true
@@ -287,6 +199,5 @@
   post_tasks:
     - name: Display completion message
       ansible.builtin.debug:
-        msg: "✓ Force new cluster operation completed. All tests passed."
+        msg: "✓ Force new cluster operation completed. Etcd cluster recovery initiated."
       run_once: true
-      when: leader_has_etcd
