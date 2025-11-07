@@ -81,3 +81,4 @@
           Log collection complete for {{ inventory_hostname }}:
           - Pacemaker logs: {{ 'collected' if pacemaker_logs.rc == 0 else 'failed' }}
           - Etcd logs: {{ 'collected' if etcd_logs.rc == 0 else 'failed/timeout' }}
+          - Logs saved to: {{ playbook_dir }}/../logs/{{ log_timestamp }}/
