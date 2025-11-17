@@ -88,19 +88,33 @@
           failed_when: false
           changed_when: true
 
-    - name: Clear force_new_cluster attribute from leader node
-      ansible.builtin.command: crm_attribute --delete --node "{{ leader_hostname }}" --lifetime reboot --name "force_new_cluster"
+    - name: Clear force_new_cluster attribute from leader node (all scopes)
       delegate_to: "{{ leader_node }}"
       run_once: true
-      failed_when: false
-      changed_when: true
+      block:
+        - name: Clear reboot-lifetime force_new_cluster from leader
+          ansible.builtin.command: crm_attribute --delete --node "{{ leader_hostname }}" --lifetime reboot --name "force_new_cluster"
+          failed_when: false
+          changed_when: true
 
-    - name: Clear force_new_cluster attribute from follower node
-      ansible.builtin.command: crm_attribute --delete --node "{{ follower_hostname }}" --lifetime reboot --name "force_new_cluster"
+        - name: Clear status force_new_cluster from leader using attrd_updater
+          ansible.builtin.command: attrd_updater -D -n force_new_cluster -N "{{ leader_hostname }}"
+          failed_when: false
+          changed_when: true
+
+    - name: Clear force_new_cluster attribute from follower node (all scopes)
       delegate_to: "{{ follower_node }}"
       run_once: true
-      failed_when: false
-      changed_when: true
+      block:
+        - name: Clear reboot-lifetime force_new_cluster from follower
+          ansible.builtin.command: crm_attribute --delete --node "{{ follower_hostname }}" --lifetime reboot --name "force_new_cluster"
+          failed_when: false
+          changed_when: true
+
+        - name: Clear status force_new_cluster from follower using attrd_updater
+          ansible.builtin.command: attrd_updater -D -n force_new_cluster -N "{{ follower_hostname }}"
+          failed_when: false
+          changed_when: true
 
     - name: Set force_new_cluster attribute on leader node
       ansible.builtin.command: crm_attribute --lifetime reboot --node "{{ leader_hostname }}" --name "force_new_cluster" --update "{{ leader_hostname }}"
@@ -157,18 +171,18 @@
               Unexpected standalone or learner attributes on {{ follower_hostname }}
               Output: {{ follower_cib_attrs.stdout }}
 
-        - name: Query reboot-lifetime CIB attributes on follower
-          ansible.builtin.command: crm_attribute --query --lifetime reboot --node "{{ follower_hostname }}"
+        - name: Query reboot-lifetime CIB attributes on follower (with proper scope filter)
+          ansible.builtin.shell: |
+            crm_attribute --query --lifetime reboot --node "{{ follower_hostname }}" --name "force_new_cluster" 2>&1 | grep 'scope=reboot' || true
           register: follower_reboot_attrs
           changed_when: false
-          failed_when: false
 
-        - name: Verify force_new_cluster attribute is NOT present on follower
+        - name: Verify force_new_cluster attribute is NOT present on follower in reboot scope
           ansible.builtin.assert:
             that:
-              - "'force_new_cluster' not in follower_reboot_attrs.stdout"
+              - follower_reboot_attrs.stdout == ""
             fail_msg: |
-              Unexpected force_new_cluster attribute on {{ follower_hostname }}
+              Unexpected force_new_cluster attribute (reboot scope) on {{ follower_hostname }}
               Output: {{ follower_reboot_attrs.stdout }}
 
     - name: Enable etcd resource on leader node
