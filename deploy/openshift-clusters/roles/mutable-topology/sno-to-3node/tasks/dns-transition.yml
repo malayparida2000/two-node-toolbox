@@ -1,4 +1,3 @@
----
 - name: "[dns] Delete SNO dnsmasq MachineConfig (switch to HAProxy DNS)"
   shell: |
     oc delete mc 50-master-dnsmasq-configuration --ignore-not-found=true
@@ -20,7 +19,7 @@
     mco_poll_timeout_minutes: "{{ sno_dns_transition_timeout_minutes }}"
     mco_poll_fail_on_timeout: true
     mco_poll_auto_fix_drain: false
-    mco_poll_check_rendered_config: false  # Standalone MC deletion - generation/config won't change
+    mco_poll_check_rendered_config: false # Standalone MC deletion - generation/config won't change
   when: delete_dnsmasq_mc.changed
 
 - name: "[dns] Check if resolv.conf has stale dnsmasq entries"
@@ -92,7 +91,7 @@
 
 - name: "[dns] DNS transition complete"
   debug:
-    msg: |
+    msg: |-
       {% if delete_dnsmasq_mc.changed %}
       ✓ SNO dnsmasq MachineConfig removed
       ✓ MCO rollout completed

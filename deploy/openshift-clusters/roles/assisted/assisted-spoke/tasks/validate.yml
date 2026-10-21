@@ -1,4 +1,3 @@
----
 # Validate spoke cluster input variables before deployment
 
 - name: Validate spoke_cluster_name is non-empty and DNS-safe
@@ -42,10 +41,8 @@
 - name: Validate VIPs are not in DHCP range (.50-.150)
   assert:
     that:
-      - spoke_api_vip | ansible.utils.ipaddr('int') | int < spoke_dhcp_start | ansible.utils.ipaddr('int') | int or
-        spoke_api_vip | ansible.utils.ipaddr('int') | int > spoke_dhcp_end | ansible.utils.ipaddr('int') | int
-      - spoke_ingress_vip | ansible.utils.ipaddr('int') | int < spoke_dhcp_start | ansible.utils.ipaddr('int') | int or
-        spoke_ingress_vip | ansible.utils.ipaddr('int') | int > spoke_dhcp_end | ansible.utils.ipaddr('int') | int
+      - spoke_api_vip | ansible.utils.ipaddr('int') | int < spoke_dhcp_start | ansible.utils.ipaddr('int') | int or spoke_api_vip | ansible.utils.ipaddr('int') | int > spoke_dhcp_end | ansible.utils.ipaddr('int') | int
+      - spoke_ingress_vip | ansible.utils.ipaddr('int') | int < spoke_dhcp_start | ansible.utils.ipaddr('int') | int or spoke_ingress_vip | ansible.utils.ipaddr('int') | int > spoke_dhcp_end | ansible.utils.ipaddr('int') | int
     fail_msg: >-
       VIPs must be outside the DHCP range ({{ spoke_dhcp_start }} - {{ spoke_dhcp_end }}).
       API VIP: {{ spoke_api_vip }}, Ingress VIP: {{ spoke_ingress_vip }}.

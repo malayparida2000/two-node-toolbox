@@ -1,4 +1,3 @@
----
 # Computed variables for kcli-install role
 # These are derived from user-configurable defaults and should not be overridden
 
@@ -16,4 +15,4 @@ kubeadmin_password_path: "{{ ansible_user_dir }}/.kcli/clusters/{{ test_cluster_
 feature_set: "{{ 'TechPreviewNoUpgrade' if topology == 'arbiter' else 'DevPreviewNoUpgrade' }}"
 
 # Arbiter count - default to 1 for arbiter topology, else 0
-arbiters: "{{ 1 if topology == 'arbiter' else 0 }}" 
+arbiters: "{{ 1 if topology == 'arbiter' else 0 }}"
