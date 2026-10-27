@@ -1,3 +1,4 @@
+---
 - import_tasks: check_vars.yml
 - name: Trigger set project
   assert:
@@ -31,3 +32,10 @@
     target: "{{make_target[method]}}"
   async: 14400
   poll: 60
+  when: not ansible_check_mode
+
+- name: Check Start OpenShift
+  make:
+    chdir: "{{dev_scripts_path}}"
+    target: "{{make_target[method]}}"
+  when: ansible_check_mode
