@@ -26,6 +26,15 @@
     - "."
     - "/root"
 
+- name: Validate install_dev_start_poll
+  assert:
+    that:
+      - install_dev_start_poll | int >= 1
+    fail_msg: >-
+      install_dev_start_poll must be >= 1 (got {{ install_dev_start_poll }}).
+      A value of 0 makes Start OpenShift fire-and-forget and hides make failures.
+  when: not ansible_check_mode
+
 - name: Start OpenShift
   make:
     chdir: "{{dev_scripts_path}}"
