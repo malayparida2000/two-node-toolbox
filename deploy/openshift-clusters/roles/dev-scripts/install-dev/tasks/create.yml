@@ -30,8 +30,8 @@
   make:
     chdir: "{{dev_scripts_path}}"
     target: "{{make_target[method]}}"
-  async: 14400
-  poll: 60
+  async: "{{ install_dev_start_async }}"
+  poll: "{{ install_dev_start_poll }}"
   when: not ansible_check_mode
 
 - name: Check Start OpenShift
