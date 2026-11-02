@@ -2,26 +2,21 @@
 #
 # Automate post-TNF OCP setup for ODF + DRBD on a two-node fencing cluster.
 #
-# Prerequisites:
-#   - TNF cluster deployed and API reachable (source that clone's proxy.env)
-#   - AWS hypervisor instance-data present in the target clone (for virsh via SSH)
-#   - Pull secret can pull quay.io/rhceph-dev/ocs-registry and ODF images
-#   - Local oc + docker|podman available
+# Run from a toolbox clone root (or deploy/). The script cds into deploy/,
+# sources common.sh + openshift-clusters/proxy.env, then does the rest.
 #
-# Usage:
-#   # From a clone that contains this script:
-#   source deploy/openshift-clusters/proxy.env
-#   ./deploy/openshift-clusters/scripts/setup-odf-tnf.sh
-#
-#   # One shared copy targeting either clone:
-#   ./setup-odf-tnf.sh --deploy-dir /path/to/two-node-toolbox-1/deploy
-#   ./setup-odf-tnf.sh --deploy-dir /path/to/two-node-toolbox-2/deploy --skip-disks
+#   cd /path/to/two-node-toolbox-1   # or -2
+#   curl -fsSL https://raw.githubusercontent.com/malayparida2000/two-node-toolbox/personal/setup-odf-tnf/deploy/openshift-clusters/scripts/setup-odf-tnf.sh | bash
 #
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# Default: script lives at deploy/openshift-clusters/scripts/ in a clone.
-DEPLOY_DIR="${DEPLOY_DIR:-$(cd "${SCRIPT_DIR}/../.." && pwd)}"
+SCRIPT_DIR=""
+if [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != */dev/fd/* && "${BASH_SOURCE[0]}" != /dev/fd/* ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
+
+DEPLOY_DIR="${DEPLOY_DIR:-}"
+DEPLOY_DIR_FROM_FLAG=0
 
 #------------------------------------------------------------------------------
 # Defaults (override via env or flags)
@@ -31,8 +26,6 @@ DIR="${DIR:-/test}"
 SIZE_SMALL="${SIZE_SMALL:-10G}"
 SIZE_LARGE="${SIZE_LARGE:-256G}"
 # Guest device names — must match PV paths and DRBD -d.
-# Prefer sdb/sdc so they align with the StorageClass PVs and DRBD backing disk.
-# Override if those names are already taken on your VMs (e.g. DEV_SMALL=sdh).
 DEV_SMALL="${DEV_SMALL:-sdb}"
 DEV_LARGE="${DEV_LARGE:-sdc}"
 VM0="${VM0:-}"
@@ -71,19 +64,12 @@ SSH_CMD=()
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [options]
+Usage: run from a toolbox clone root (or deploy/):
 
-Automates TNF post-install ODF + DRBD setup:
-  1) Create/attach libvirt disks on hypervisor
-  2) Create local-storage StorageClass + block PVs
-  3) Replace redhat-operators CatalogSource with OCS registry
-  4) Install ODF operator (Subscription)
-  5) Extract and run DRBD setup script from operator ConfigMap
-  6) Label nodes for openshift-storage
-  7) Create StorageCluster
+  curl -fsSL https://raw.githubusercontent.com/malayparida2000/two-node-toolbox/personal/setup-odf-tnf/deploy/openshift-clusters/scripts/setup-odf-tnf.sh | bash
 
 Options:
-  --deploy-dir DIR        Path to that clone's deploy/ (default: inferred from script location)
+  --deploy-dir DIR        Path to that clone's deploy/ (default: cwd)
   --skip-disks            Skip libvirt pool/volume/attach
   --skip-storage          Skip StorageClass + PV apply
   --skip-catalog          Skip OperatorHub patch + CatalogSource
@@ -93,25 +79,45 @@ Options:
   --skip-storagecluster   Skip StorageCluster create
   --dry-run               Print actions without applying
   -h, --help              Show this help
-
-Environment overrides (common):
-  DEPLOY_DIR POOL DIR SIZE_SMALL SIZE_LARGE DEV_SMALL DEV_LARGE VM0 VM1
-  OCS_REGISTRY_IMAGE ODF_CHANNEL PV_CAPACITY PV_PATH DRBD_DEVICE
-  ODF_NAMESPACE STORAGECLUSTER_NAME
 EOF
 }
 
-# Parse args before sourcing common.sh so --deploy-dir / --help work from any copy.
+resolve_deploy_dir() {
+  local candidate=""
+  if [[ "${DEPLOY_DIR_FROM_FLAG}" -eq 1 || -n "${DEPLOY_DIR}" ]]; then
+    candidate="${DEPLOY_DIR}"
+  elif [[ -f ./deploy/common.sh ]]; then
+    candidate="./deploy"
+  elif [[ -f ./common.sh ]]; then
+    candidate="."
+  elif [[ -n "${SCRIPT_DIR}" && -f "${SCRIPT_DIR}/../../common.sh" ]]; then
+    candidate="${SCRIPT_DIR}/../.."
+  else
+    echo "ERROR: run this from a two-node-toolbox clone root (or deploy/)." >&2
+    echo "  cd /path/to/two-node-toolbox-1   # or -2" >&2
+    echo "  curl -fsSL .../setup-odf-tnf.sh | bash" >&2
+    exit 1
+  fi
+  DEPLOY_DIR="$(cd "${candidate}" && pwd)"
+  [[ -f "${DEPLOY_DIR}/common.sh" ]] || {
+    echo "ERROR: ${DEPLOY_DIR}/common.sh not found" >&2
+    exit 1
+  }
+}
+
+# Parse args before cd/source so --help works anywhere.
 ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --deploy-dir)
       [[ $# -ge 2 ]] || { echo "ERROR: --deploy-dir requires a path" >&2; exit 1; }
       DEPLOY_DIR="$2"
+      DEPLOY_DIR_FROM_FLAG=1
       shift 2
       ;;
     --deploy-dir=*)
       DEPLOY_DIR="${1#*=}"
+      DEPLOY_DIR_FROM_FLAG=1
       shift
       ;;
     -h|--help)
@@ -126,14 +132,20 @@ while [[ $# -gt 0 ]]; do
 done
 set -- "${ARGS[@]+"${ARGS[@]}"}"
 
-DEPLOY_DIR="$(cd "${DEPLOY_DIR}" && pwd)"
-[[ -f "${DEPLOY_DIR}/common.sh" ]] || {
-  echo "ERROR: ${DEPLOY_DIR}/common.sh not found (pass --deploy-dir /path/to/clone/deploy)" >&2
-  exit 1
-}
+resolve_deploy_dir
+cd "${DEPLOY_DIR}"
 
 # shellcheck source=/dev/null
 source "${DEPLOY_DIR}/common.sh"
+
+PROXY_ENV="${DEPLOY_DIR}/openshift-clusters/proxy.env"
+if [[ -f "${PROXY_ENV}" ]]; then
+  # shellcheck source=/dev/null
+  source "${PROXY_ENV}"
+  echo "==> cd ${DEPLOY_DIR} && sourced openshift-clusters/proxy.env"
+else
+  echo "WARNING: ${PROXY_ENV} not found; relying on existing KUBECONFIG/proxy env" >&2
+fi
 
 #------------------------------------------------------------------------------
 # Helpers (after common.sh so msg_* are available)
@@ -192,19 +204,10 @@ done
 # Preflight
 #------------------------------------------------------------------------------
 preflight() {
-  local proxy_env="${DEPLOY_DIR}/openshift-clusters/proxy.env"
   local node_dir
 
-  if [[ -f "${proxy_env}" ]]; then
-    # shellcheck source=/dev/null
-    source "${proxy_env}"
-    log "Sourced ${proxy_env}"
-  else
-    warn "proxy.env not found at ${proxy_env}; relying on existing KUBECONFIG/proxy env"
-  fi
-
   command -v oc >/dev/null 2>&1 || die "oc not found in PATH"
-  run_oc get nodes >/dev/null 2>&1 || die "Cannot reach cluster API (oc get nodes failed). Source proxy.env and verify the cluster is up."
+  run_oc get nodes >/dev/null 2>&1 || die "Cannot reach cluster API (oc get nodes failed). Is the cluster up and proxy.env present?"
 
   local not_ready
   not_ready="$(oc get nodes --no-headers 2>/dev/null | awk '$2 != "Ready" {print $1}' || true)"
