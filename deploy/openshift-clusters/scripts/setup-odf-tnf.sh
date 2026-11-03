@@ -25,21 +25,28 @@ POOL="${POOL:-test}"
 DIR="${DIR:-/test}"
 SIZE_SMALL="${SIZE_SMALL:-10G}"
 SIZE_LARGE="${SIZE_LARGE:-256G}"
-# Guest device names — must match PV paths and DRBD -d.
-DEV_SMALL="${DEV_SMALL:-sdb}"
-DEV_LARGE="${DEV_LARGE:-sdc}"
+# Libvirt <target dev=...> names for the extra disks.
+# Avoid sdb/sdc: agent/dev-scripts VMs often already use those for CD-ROMs, which
+# made disk_attached() falsely report "already attached" and skip the volumes.
+# Guest /dev names after virtio-scsi hotplug are usually still sdb/sdc (LUN order);
+# create_disks() reconciles DRBD_DEVICE/PV_PATH from lsblk by size when possible.
+DEV_SMALL="${DEV_SMALL:-sdd}"
+DEV_LARGE="${DEV_LARGE:-sde}"
 VM0="${VM0:-}"
 VM1="${VM1:-}"
 
 ODF_NAMESPACE="${ODF_NAMESPACE:-openshift-storage}"
 STORAGE_CLASS="${STORAGE_CLASS:-local-storage}"
 PV_CAPACITY="${PV_CAPACITY:-100Gi}"
-PV_PATH="${PV_PATH:-/dev/${DEV_LARGE}}"
-DRBD_DEVICE="${DRBD_DEVICE:-/dev/${DEV_SMALL}}"
+# Guest paths (overridden after attach if discovery succeeds).
+PV_PATH="${PV_PATH:-}"
+DRBD_DEVICE="${DRBD_DEVICE:-}"
 
 OCS_REGISTRY_IMAGE="${OCS_REGISTRY_IMAGE:-quay.io/rhceph-dev/ocs-registry:5.0.0-67.konflux}"
-ODF_CHANNEL="${ODF_CHANNEL:-stable}"
-ODF_PACKAGE="${ODF_PACKAGE:-openshift-data-foundation}"
+# Dev/konflux catalogs use package "odf-operator" with channels like stable-5.0.
+# Production redhat-operators uses "openshift-data-foundation" / "stable".
+ODF_CHANNEL="${ODF_CHANNEL:-}"
+ODF_PACKAGE="${ODF_PACKAGE:-}"
 CATALOG_SOURCE_NAME="${CATALOG_SOURCE_NAME:-redhat-operators}"
 
 STORAGECLUSTER_NAME="${STORAGECLUSTER_NAME:-ocs-storagecluster}"
@@ -316,18 +323,20 @@ create_vol vol_1_small "\$SIZE_SMALL"
 create_vol vol_0_large "\$SIZE_LARGE"
 create_vol vol_1_large "\$SIZE_LARGE"
 
+# Match by volume source — target names like sdb/sdc are often taken by CD-ROMs.
 disk_attached() {
-  local vm="\$1" dev="\$2"
-  sudo virsh dumpxml "\$vm" | grep -q "<target dev='\${dev}'"
+  local vm="\$1" vol="\$2"
+  sudo virsh dumpxml "\$vm" | grep -q "pool='\${POOL}' volume='\${vol}'"
 }
 
 attach_disk() {
   local vm="\$1" vol="\$2" dev="\$3"
-  if disk_attached "\$vm" "\$dev"; then
-    echo "Disk \${dev} already attached to \${vm}"
+  if disk_attached "\$vm" "\$vol"; then
+    echo "Volume \${vol} already attached to \${vm}"
     return 0
   fi
-  sudo virsh attach-device "\$vm" /dev/stdin --persistent <<EOF
+  # --live so the running guest sees it; --persistent keeps it across reboot.
+  sudo virsh attach-device "\$vm" /dev/stdin --live --persistent <<EOF
 <disk type='volume' device='disk'>
   <driver name='qemu' type='qcow2' discard='unmap'/>
   <source pool='\${POOL}' volume='\${vol}'/>
@@ -344,17 +353,59 @@ attach_disk "\$VM1" vol_1_large "\$DEV_LARGE"
 REMOTE
 
   log "Disks attached. Giving guests a few seconds to see them..."
-  sleep 5
+  sleep 8
 
-  # Best-effort visibility check (oc debug can be slow / flaky; warn only).
   discover_node_names
-  local node
-  for node in "${NODE0}" "${NODE1}"; do
-    if oc debug "node/${node}" --quiet -- chroot /host test -b "${DRBD_DEVICE}" 2>/dev/null \
-      && oc debug "node/${node}" --quiet -- chroot /host test -b "${PV_PATH}" 2>/dev/null; then
-      log "Verified ${DRBD_DEVICE} and ${PV_PATH} exist on ${node}"
+  reconcile_guest_disk_paths
+}
+
+# Map libvirt volumes to guest /dev names via size (small=DRBD, large=PV).
+reconcile_guest_disk_paths() {
+  local node lsblk_out small_dev large_dev
+  node="${NODE0}"
+
+  # SIZE_SMALL/LARGE look like 10G / 256G — normalize to lsblk SIZE tokens.
+  local want_small want_large
+  want_small="${SIZE_SMALL}"
+  want_large="${SIZE_LARGE}"
+
+  lsblk_out="$(oc debug "node/${node}" --quiet -- chroot /host lsblk -dn -o NAME,SIZE,TYPE 2>/dev/null || true)"
+  if [[ -z "${lsblk_out}" ]]; then
+    warn "Could not lsblk on ${node}; using DEV_SMALL/DEV_LARGE as guest names"
+    DRBD_DEVICE="${DRBD_DEVICE:-/dev/${DEV_SMALL}}"
+    PV_PATH="${PV_PATH:-/dev/${DEV_LARGE}}"
+    return 0
+  fi
+
+  log "lsblk on ${node}:"$'\n'"${lsblk_out}"
+
+  # Prefer exact SIZE match for disk-type devices that are not sda (boot).
+  small_dev="$(printf '%s\n' "${lsblk_out}" | awk -v s="${want_small}" '$3=="disk" && $1!="sda" && $2==s {print $1; exit}')"
+  large_dev="$(printf '%s\n' "${lsblk_out}" | awk -v s="${want_large}" '$3=="disk" && $1!="sda" && $2==s {print $1; exit}')"
+
+  if [[ -z "${small_dev}" || -z "${large_dev}" ]]; then
+    # Fallback: first two non-sda disks by name order.
+    local extras
+    extras="$(printf '%s\n' "${lsblk_out}" | awk '$3=="disk" && $1!="sda" {print $1}')"
+    small_dev="${small_dev:-$(printf '%s\n' "${extras}" | sed -n '1p')}"
+    large_dev="${large_dev:-$(printf '%s\n' "${extras}" | sed -n '2p')}"
+  fi
+
+  if [[ -z "${small_dev}" || -z "${large_dev}" ]]; then
+    die "Extra disks not visible in guest ${node}. Attached volumes may need a VM reboot, or set DRBD_DEVICE=/dev/... PV_PATH=/dev/..."
+  fi
+
+  DRBD_DEVICE="${DRBD_DEVICE:-/dev/${small_dev}}"
+  PV_PATH="${PV_PATH:-/dev/${large_dev}}"
+  log "Guest disk mapping: DRBD_DEVICE=${DRBD_DEVICE} PV_PATH=${PV_PATH}"
+
+  local n
+  for n in "${NODE0}" "${NODE1}"; do
+    if oc debug "node/${n}" --quiet -- chroot /host test -b "${DRBD_DEVICE}" 2>/dev/null \
+      && oc debug "node/${n}" --quiet -- chroot /host test -b "${PV_PATH}" 2>/dev/null; then
+      log "Verified ${DRBD_DEVICE} and ${PV_PATH} on ${n}"
     else
-      warn "Could not verify ${DRBD_DEVICE}/${PV_PATH} on ${node} via oc debug. If attach used different target names, set DEV_SMALL/DEV_LARGE accordingly."
+      die "Missing ${DRBD_DEVICE} or ${PV_PATH} on ${n}"
     fi
   done
 }
@@ -365,6 +416,10 @@ REMOTE
 create_local_storage() {
   [[ "${SKIP_STORAGE}" -eq 1 ]] && { log "Skipping StorageClass/PVs"; return 0; }
   discover_node_names
+  # If disks were skipped, fall back to conventional guest names.
+  DRBD_DEVICE="${DRBD_DEVICE:-/dev/sdb}"
+  PV_PATH="${PV_PATH:-/dev/sdc}"
+  [[ -n "${PV_PATH}" ]] || die "PV_PATH is empty"
 
   log "Applying StorageClass ${STORAGE_CLASS} and block PVs on ${PV_PATH} (${PV_CAPACITY})"
 
@@ -450,28 +505,44 @@ prepare_catalog() {
   }
 }'
 
-  if [[ "${DRY_RUN}" -eq 0 ]]; then
-    wait_for "default redhat-operators CatalogSource removal" 180 \
-      bash -c "! oc get catalogsource ${CATALOG_SOURCE_NAME} -n openshift-marketplace >/dev/null 2>&1"
-  fi
-
   log "Applying ICSP/IDMS from ${OCS_REGISTRY_IMAGE}"
   local mirror_applied=0
   if [[ "${DRY_RUN}" -eq 1 ]]; then
     echo "DRY-RUN: would extract /icsp.yaml (and /idms.yaml if present) from ${OCS_REGISTRY_IMAGE}"
   else
-    if container_run --entrypoint cat "${OCS_REGISTRY_IMAGE}" /icsp.yaml > "${WORKDIR}/icsp.yaml" 2>/dev/null; then
-      oc apply -f "${WORKDIR}/icsp.yaml"
+    # Dev/konflux catalogs point bundles at registry.redhat.io; without these
+    # mirrors, OLM unpack jobs fail with unauthorized ImagePullBackOff.
+    if ! command -v docker >/dev/null 2>&1 && ! command -v podman >/dev/null 2>&1; then
+      die "Need docker or podman to extract ICSP/IDMS from ${OCS_REGISTRY_IMAGE}"
+    fi
+
+    local extract_err="${WORKDIR}/mirror-extract.err"
+    : > "${extract_err}"
+
+    if container_run --entrypoint cat "${OCS_REGISTRY_IMAGE}" /idms.yaml \
+         > "${WORKDIR}/idms.yaml" 2>>"${extract_err}" \
+       && grep -q '^apiVersion:' "${WORKDIR}/idms.yaml"; then
+      oc apply -f "${WORKDIR}/idms.yaml"
       mirror_applied=1
     else
-      warn "Could not extract /icsp.yaml from registry image (may be OK on some tags)"
+      warn "Could not extract /idms.yaml from registry image"
     fi
-    if container_run --entrypoint cat "${OCS_REGISTRY_IMAGE}" /idms.yaml > "${WORKDIR}/idms.yaml" 2>/dev/null; then
-      if oc apply -f "${WORKDIR}/idms.yaml"; then
+
+    if container_run --entrypoint cat "${OCS_REGISTRY_IMAGE}" /icsp.yaml \
+         > "${WORKDIR}/icsp.yaml" 2>>"${extract_err}" \
+       && grep -q '^apiVersion:' "${WORKDIR}/icsp.yaml"; then
+      if oc apply -f "${WORKDIR}/icsp.yaml"; then
         mirror_applied=1
       else
-        warn "IDMS apply failed (optional on older OCP)"
+        warn "ICSP apply failed (IDMS alone is enough on OCP 4.13+)"
       fi
+    else
+      warn "Could not extract /icsp.yaml from registry image"
+    fi
+
+    if [[ "${mirror_applied}" -eq 0 ]]; then
+      [[ -s "${extract_err}" ]] && cat "${extract_err}" >&2
+      die "Failed to extract/apply ICSP or IDMS from ${OCS_REGISTRY_IMAGE}. Bundle pulls from registry.redhat.io will fail without mirrors. Is docker/podman running?"
     fi
   fi
 
@@ -516,10 +587,74 @@ EOF
 #------------------------------------------------------------------------------
 # Phase 4: ODF Subscription
 #------------------------------------------------------------------------------
+# Resolve package/channel from the live CatalogSource packagemanifests.
+# Dev catalogs (ocs-registry) ship "odf-operator" with "stable-5.0";
+# production redhat-operators ships "openshift-data-foundation" with "stable".
+resolve_odf_package_channel() {
+  local pkg="" channel="" candidate default_channel
+  local -a candidates=()
+
+  if [[ -n "${ODF_PACKAGE}" ]]; then
+    candidates+=("${ODF_PACKAGE}")
+  fi
+  candidates+=("odf-operator" "openshift-data-foundation")
+
+  for candidate in "${candidates[@]}"; do
+    if oc get packagemanifest "${candidate}" -n openshift-marketplace >/dev/null 2>&1; then
+      # Prefer the CatalogSource we just created when multiple catalogs exist.
+      local src
+      src="$(oc get packagemanifest "${candidate}" -n openshift-marketplace \
+        -o jsonpath='{.status.catalogSource}' 2>/dev/null || true)"
+      if [[ -z "${src}" || "${src}" == "${CATALOG_SOURCE_NAME}" ]]; then
+        pkg="${candidate}"
+        break
+      fi
+      # Keep first match as fallback if catalogSource field is absent / differs.
+      [[ -z "${pkg}" ]] && pkg="${candidate}"
+    fi
+  done
+
+  [[ -n "${pkg}" ]] || die "No ODF packagemanifest found in openshift-marketplace (tried: ${candidates[*]}). Is CatalogSource ${CATALOG_SOURCE_NAME} READY?"
+
+  default_channel="$(oc get packagemanifest "${pkg}" -n openshift-marketplace \
+    -o jsonpath='{.status.defaultChannel}' 2>/dev/null || true)"
+
+  if [[ -n "${ODF_CHANNEL}" ]]; then
+    channel="${ODF_CHANNEL}"
+  elif [[ -n "${default_channel}" ]]; then
+    channel="${default_channel}"
+  else
+    channel="stable"
+  fi
+
+  # Validate channel exists on the package when possible.
+  if [[ "${DRY_RUN}" -eq 0 ]]; then
+    local channels
+    channels="$(oc get packagemanifest "${pkg}" -n openshift-marketplace \
+      -o jsonpath='{range .status.channels[*]}{.name}{"\n"}{end}' 2>/dev/null || true)"
+    if [[ -n "${channels}" ]] && ! printf '%s\n' "${channels}" | grep -qx "${channel}"; then
+      die "Channel '${channel}' not found for package ${pkg}. Available: $(printf '%s' "${channels}" | paste -sd, -). Set ODF_CHANNEL=..."
+    fi
+  fi
+
+  ODF_PACKAGE="${pkg}"
+  ODF_CHANNEL="${channel}"
+  log "Resolved ODF package=${ODF_PACKAGE} channel=${ODF_CHANNEL} (defaultChannel=${default_channel:-none})"
+}
+
 install_odf() {
   [[ "${SKIP_ODF}" -eq 1 ]] && { log "Skipping ODF install"; return 0; }
 
-  log "Installing ODF operator (channel=${ODF_CHANNEL}, source=${CATALOG_SOURCE_NAME})"
+  if [[ "${DRY_RUN}" -eq 0 ]]; then
+    resolve_odf_package_channel
+  else
+    ODF_PACKAGE="${ODF_PACKAGE:-odf-operator}"
+    ODF_CHANNEL="${ODF_CHANNEL:-stable-5.0}"
+  fi
+
+  log "Installing ODF operator (package=${ODF_PACKAGE}, channel=${ODF_CHANNEL}, source=${CATALOG_SOURCE_NAME})"
+
+  # Namespace + OperatorGroup
   run_oc apply -f - <<EOF
 apiVersion: v1
 kind: Namespace
@@ -536,7 +671,23 @@ metadata:
 spec:
   targetNamespaces:
     - ${ODF_NAMESPACE}
----
+EOF
+
+  # Recreate subscription when package/channel changed — OLM often will not
+  # recover from ConstraintsNotSatisfiable / ResolutionFailed otherwise.
+  if [[ "${DRY_RUN}" -eq 0 ]] && oc get subscription odf-operator -n "${ODF_NAMESPACE}" >/dev/null 2>&1; then
+    local cur_pkg cur_channel
+    cur_pkg="$(oc get subscription odf-operator -n "${ODF_NAMESPACE}" -o jsonpath='{.spec.name}' 2>/dev/null || true)"
+    cur_channel="$(oc get subscription odf-operator -n "${ODF_NAMESPACE}" -o jsonpath='{.spec.channel}' 2>/dev/null || true)"
+    if [[ "${cur_pkg}" != "${ODF_PACKAGE}" || "${cur_channel}" != "${ODF_CHANNEL}" ]]; then
+      log "Existing subscription has package=${cur_pkg} channel=${cur_channel}; recreating for ${ODF_PACKAGE}/${ODF_CHANNEL}"
+      oc delete subscription odf-operator -n "${ODF_NAMESPACE}" --wait=true
+      # Stale InstallPlans / CSVs from the failed resolution can block the new one.
+      oc delete installplan --all -n "${ODF_NAMESPACE}" --ignore-not-found=true >/dev/null 2>&1 || true
+    fi
+  fi
+
+  run_oc apply -f - <<EOF
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
@@ -551,10 +702,33 @@ spec:
 EOF
 
   csv_succeeded() {
-    local pending
-    pending="$(oc get csv -n "${ODF_NAMESPACE}" --no-headers 2>/dev/null | awk '$NF != "Succeeded" {print $1}' || true)"
-    local count
-    count="$(oc get csv -n "${ODF_NAMESPACE}" --no-headers 2>/dev/null | wc -l | tr -d ' ')"
+    # Fail fast only on permanent resolution errors (wrong package/channel).
+    # Transient ConstraintsNotSatisfiable races are common while dependency
+    # CSVs/subscriptions settle and must not abort the wait.
+    local failed msg
+    failed="$(oc get subscription odf-operator -n "${ODF_NAMESPACE}" \
+      -o jsonpath='{range .status.conditions[?(@.type=="ResolutionFailed")]}{.status}{"|"}{.message}{"\n"}{end}' 2>/dev/null || true)"
+    if [[ "${failed}" == True\|* ]]; then
+      msg="${failed#True|}"
+      if [[ "${msg}" == *"no operators found in package"* ]]; then
+        die "Subscription resolution failed: ${msg}"
+      fi
+    fi
+
+    # Require primary odf-operator CSV Succeeded, and every other CSV Succeeded.
+    # Use jsonpath — tabular PHASE is not always $NF when RELEASE/REPLACES are empty.
+    local primary_phase pending count
+    primary_phase="$(oc get csv -n "${ODF_NAMESPACE}" -o jsonpath='{range .items[?(@.metadata.name=~"odf-operator\\..*")]}{.status.phase}{"\n"}{end}' 2>/dev/null | head -1 || true)"
+    # jsonpath =~ may be unsupported on some oc versions; fall back to name scan.
+    if [[ -z "${primary_phase}" ]]; then
+      primary_phase="$(oc get csv -n "${ODF_NAMESPACE}" -o jsonpath='{range .items[*]}{.metadata.name}{"="}{.status.phase}{"\n"}{end}' 2>/dev/null \
+        | awk -F= '$1 ~ /^odf-operator\./ {print $2; exit}' || true)"
+    fi
+    [[ "${primary_phase}" == "Succeeded" ]] || return 1
+
+    pending="$(oc get csv -n "${ODF_NAMESPACE}" -o jsonpath='{range .items[*]}{.metadata.name}{"="}{.status.phase}{"\n"}{end}' 2>/dev/null \
+      | awk -F= '$2 != "Succeeded" && $2 != "" {print $1"("$2")"}' || true)"
+    count="$(oc get csv -n "${ODF_NAMESPACE}" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null | grep -c . || true)"
     [[ "${count}" -ge 1 && -z "${pending}" ]]
   }
   if [[ "${DRY_RUN}" -eq 0 ]]; then
